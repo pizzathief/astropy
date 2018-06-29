@@ -2,16 +2,14 @@
 Table property for providing information about table.
 """
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 import sys
 import os
 
 import numpy as np
-from ..extern import six
 from ..utils.data_info import DataInfo
 
 __all__ = ['table_info', 'TableInfo']
+
 
 def table_info(tbl, option='attributes', out=''):
     """
@@ -53,15 +51,15 @@ def table_info(tbl, option='attributes', out=''):
 
     Parameters
     ----------
-    option: str, function, list of (str or function)
-        Info option (default='attributes')
-    out: file-like object, None
-        Output destination (default=sys.stdout).  If None then a
+    option : str, function, list of (str or function)
+        Info option, defaults to 'attributes'.
+    out : file-like object, None
+        Output destination, default is sys.stdout.  If None then a
         Table with information attributes is returned
 
     Returns
     -------
-    info: `~astropy.table.Table` if out==None else None
+    info : `~astropy.table.Table` if out==None else None
     """
     from .table import Table
 
@@ -90,10 +88,6 @@ def table_info(tbl, option='attributes', out=''):
 
     # Since info is going to a filehandle for viewing then remove uninteresting
     # columns.
-    for name in info.colnames:
-        if np.all(info[name] == ''):
-            del info[name]
-
     if 'class' in info.colnames:
         # Remove 'class' info column if all table columns are the same class
         # and they are the default column class for that table.
@@ -108,12 +102,17 @@ def table_info(tbl, option='attributes', out=''):
     if 'length' in info.colnames and np.all(info['length'] == len(tbl)):
         del info['length']
 
+    for name in info.colnames:
+        if info[name].dtype.kind in 'SU' and np.all(info[name] == ''):
+            del info[name]
+
     if tbl.colnames:
         outlines.extend(info.pformat(max_width=-1, max_lines=-1, show_unit=False))
     else:
         outlines.append('<No columns>')
 
     out.writelines(outline + os.linesep for outline in outlines)
+
 
 class TableInfo(DataInfo):
     _parent = None

@@ -1,7 +1,7 @@
 /*============================================================================
 
-  WCSLIB 5.9 - an implementation of the FITS WCS standard.
-  Copyright (C) 1995-2015, Mark Calabretta
+  WCSLIB 5.18 - an implementation of the FITS WCS standard.
+  Copyright (C) 1995-2018, Mark Calabretta
 
   This file is part of WCSLIB.
 
@@ -22,7 +22,7 @@
 
   Author: Mark Calabretta, Australia Telescope National Facility, CSIRO.
   http://www.atnf.csiro.au/people/Mark.Calabretta
-  $Id: wcsfix.c,v 5.9 2015/07/21 09:20:01 mcalabre Exp $
+  $Id: wcsfix.c,v 5.18 2018/01/10 08:32:14 mcalabre Exp $
 *===========================================================================*/
 
 #include <math.h>
@@ -250,7 +250,7 @@ static int parse_date(const char *buf, int *hour, int *minute, double *sec)
   char ctmp[72];
 
   if (sscanf(buf, "%2d:%2d:%s", hour, minute, ctmp) < 3 ||
-      wcsutil_str2double(ctmp, "%lf", sec)) {
+      wcsutil_str2double(ctmp, sec)) {
     return 1;
   }
 
@@ -441,25 +441,31 @@ int unitfix(int ctrl, struct wcsprm *wcs)
 
 {
   int  i, k, result, status = FIXERR_NO_CHANGE;
-  char orig_unit[80], msg[WCSERR_MSG_LENGTH];
+  char orig_unit[80], msg[WCSERR_MSG_LENGTH], msgtmp[WCSERR_MSG_LENGTH];
   const char *function = "unitfix";
   struct wcserr **err;
 
   if (wcs == 0x0) return FIXERR_NULL_POINTER;
   err = &(wcs->err);
 
-  strcpy(msg, "Changed units: ");
+  strncpy(msg, "Changed units: ", WCSERR_MSG_LENGTH);
+
   for (i = 0; i < wcs->naxis; i++) {
     strncpy(orig_unit, wcs->cunit[i], 80);
     result = wcsutrne(ctrl, wcs->cunit[i], &(wcs->err));
     if (result == 0 || result == 12) {
       k = strlen(msg);
-      sprintf(msg+k, "'%s' -> '%s', ", orig_unit, wcs->cunit[i]);
-      status = FIXERR_UNITS_ALIAS;
+      if (k < WCSERR_MSG_LENGTH-1) {
+        wcsutil_null_fill(80, orig_unit);
+        sprintf(msgtmp, "'%s' -> '%s', ", orig_unit, wcs->cunit[i]);
+        strncpy(msg+k, msgtmp, WCSERR_MSG_LENGTH-1-k);
+        status = FIXERR_UNITS_ALIAS;
+      }
     }
   }
 
   if (status == FIXERR_UNITS_ALIAS) {
+    /* Chop off the trailing ", ". */
     k = strlen(msg) - 2;
     msg[k] = '\0';
     wcserr_set(WCSERR_SET(FIXERR_UNITS_ALIAS), msg);
@@ -506,11 +512,13 @@ int spcfix(struct wcsprm *wcs)
         if (status == 0) {
           /* ...and specsys was also. */
           wcserr_set(WCSERR_SET(FIXERR_SPC_UPDATE),
-            "Changed CTYPE%d from '%s' to '%s', and SPECSYS to '%s'",
-            i+1, wcs->ctype[i], ctype, wcs->specsys);
+            "Changed CTYPE%d from '%s' to '%s', and SPECSYS to '%s' "
+            "(VELREF=%d)", i+1, wcs->ctype[i], ctype, wcs->specsys,
+            wcs->velref);
         } else {
           wcserr_set(WCSERR_SET(FIXERR_SPC_UPDATE),
-            "Changed CTYPE%d from '%s' to '%s'", i+1, wcs->ctype[i], ctype);
+            "Changed CTYPE%d from '%s' to '%s' (VELREF=%d)", i+1,
+            wcs->ctype[i], ctype, wcs->velref);
           status = 0;
         }
 

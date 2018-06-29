@@ -1,12 +1,11 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os
 import subprocess
 import sys
 
-from ....tests.helper import pytest
+import pytest
 
 
 def test_wcsapi_extension(tmpdir):

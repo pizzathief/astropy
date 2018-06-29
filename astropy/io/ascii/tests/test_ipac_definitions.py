@@ -1,19 +1,16 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-# TEST_UNICODE_LITERALS
+
+from io import StringIO
+
+import pytest
 
 from ..ui import read
 from ..ipac import Ipac, IpacFormatError, IpacFormatErrorDBMS
-from ....tests.helper import pytest, catch_warnings
+from ....tests.helper import catch_warnings
 from ... import ascii
 from ....table import Table
 from ..core import masked
-
-
-try:
-    from cStringIO import StringIO
-except ImportError:
-    from io import StringIO
 
 
 DATA = '''

@@ -9,8 +9,6 @@ the physical unit name of a `Unit` can be obtained using its `ptype`
 property.
 """
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 from . import core
 from . import si
@@ -23,6 +21,7 @@ __all__ = ['def_physical_type', 'get_physical_type']
 
 
 _physical_unit_mapping = {}
+_unit_physical_mapping = {}
 
 
 def def_physical_type(unit, name):
@@ -43,6 +42,7 @@ def def_physical_type(unit, name):
             "{0!r} ({1!r}) already defined as {2!r}".format(
                 r, name, _physical_unit_mapping[r]))
     _physical_unit_mapping[r] = name
+    _unit_physical_mapping[name] = r
 
 
 def get_physical_type(unit):
@@ -124,6 +124,10 @@ for unit, name in [
     (astrophys.photon / si.AA / si.cm ** 2 / si.s, 'photon flux density wav'),
     (astrophys.R, 'photon flux'),
     (astrophys.bit, 'data quantity'),
-    (astrophys.bit / si.s, 'bandwidth')
+    (astrophys.bit / si.s, 'bandwidth'),
+    (cgs.Franklin, 'electrical charge (ESU)'),
+    (cgs.statampere, 'electrical current (ESU)'),
+    (cgs.Biot, 'electrical current (EMU)'),
+    (cgs.abcoulomb, 'electrical charge (EMU)')
 ]:
     def_physical_type(unit, name)

@@ -1,19 +1,21 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
+
+import pytest
 import numpy as np
 from numpy.testing import assert_allclose
-from ...tests.helper import pytest, assert_quantity_allclose
+
+from ...tests.helper import assert_quantity_allclose
 from ..utils import (extract_array, add_array, subpixel_indices,
                      block_reduce, block_replicate,
                      overlap_slices, NoOverlapError, PartialOverlapError,
                      Cutout2D)
-from ...wcs import WCS
+from ...wcs import WCS, Sip
+from ...wcs.utils import proj_plane_pixel_area
 from ...coordinates import SkyCoord
 from ... import units as u
 
 try:
-    import skimage
+    import skimage  # pylint: disable=W0611
     HAS_SKIMAGE = True
 except ImportError:
     HAS_SKIMAGE = False
@@ -90,7 +92,7 @@ def test_extract_array_1d_even():
     '''
     assert np.all(extract_array(np.arange(4), (2, ), (0, ), fill_value=-99) == np.array([-99, 0]))
     for i in [1, 2, 3]:
-        assert np.all(extract_array(np.arange(4), (2, ), (i, )) == np.array([i -1 , i]))
+        assert np.all(extract_array(np.arange(4), (2, ), (i, )) == np.array([i - 1, i]))
     assert np.all(extract_array(np.arange(4.), (2, ), (4, ), fill_value=np.inf) == np.array([3, np.inf]))
 
 
@@ -105,13 +107,13 @@ def test_extract_array_1d_odd():
     '''
     assert np.all(extract_array(np.arange(4), (3,), (-1, ), fill_value=-99) == np.array([-99, -99, 0]))
     assert np.all(extract_array(np.arange(4), (3,), (0, ), fill_value=-99) == np.array([-99, 0, 1]))
-    for i in [1,2]:
+    for i in [1, 2]:
         assert np.all(extract_array(np.arange(4), (3,), (i, )) == np.array([i-1, i, i+1]))
     assert np.all(extract_array(np.arange(4), (3,), (3, ), fill_value=-99) == np.array([2, 3, -99]))
     arrayin = np.arange(4.)
     extracted = extract_array(arrayin, (3,), (4, ))
     assert extracted[0] == 3
-    assert np.isnan(extracted[1]) # since I cannot use `==` to test for nan
+    assert np.isnan(extracted[1])  # since I cannot use `==` to test for nan
     assert extracted.dtype == arrayin.dtype
 
 
@@ -134,7 +136,7 @@ def test_extract_array_1d_trim():
     '''
     assert np.all(extract_array(np.arange(4), (2, ), (0, ), mode='trim') == np.array([0]))
     for i in [1, 2, 3]:
-        assert np.all(extract_array(np.arange(4), (2, ), (i, ), mode='trim') == np.array([i -1 , i]))
+        assert np.all(extract_array(np.arange(4), (2, ), (i, ), mode='trim') == np.array([i - 1, i]))
     assert np.all(extract_array(np.arange(4.), (2, ), (4, ), mode='trim') == np.array([3]))
 
 
@@ -218,7 +220,7 @@ def test_subpixel_indices(position, subpixel_index):
 
 
 @pytest.mark.skipif('not HAS_SKIMAGE')
-class TestBlockReduce(object):
+class TestBlockReduce:
     def test_1d(self):
         """Test 1D array."""
         data = np.arange(4)
@@ -277,7 +279,7 @@ class TestBlockReduce(object):
 
 
 @pytest.mark.skipif('not HAS_SKIMAGE')
-class TestBlockReplicate(object):
+class TestBlockReplicate:
     def test_1d(self):
         """Test 1D array."""
         data = np.arange(2)
@@ -322,7 +324,7 @@ class TestBlockReplicate(object):
             block_replicate(data, (2, 2))
 
 
-class TestCutout2D(object):
+class TestCutout2D:
     def setup_class(self):
         self.data = np.arange(20.).reshape(5, 4)
         self.position = SkyCoord('13h11m29.96s -01d19m18.7s', frame='icrs')
@@ -330,11 +332,33 @@ class TestCutout2D(object):
         rho = np.pi / 3.
         scale = 0.05 / 3600.
         wcs.wcs.cd = [[scale*np.cos(rho), -scale*np.sin(rho)],
-                        [scale*np.sin(rho), scale*np.cos(rho)]]
+                      [scale*np.sin(rho), scale*np.cos(rho)]]
         wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
-        wcs.wcs.crval = [self.position.ra.value, self.position.dec.value]
+        wcs.wcs.crval = [self.position.ra.to_value(u.deg),
+                         self.position.dec.to_value(u.deg)]
         wcs.wcs.crpix = [3, 3]
         self.wcs = wcs
+
+        # add SIP
+        sipwcs = wcs.deepcopy()
+        sipwcs.wcs.ctype = ['RA---TAN-SIP', 'DEC--TAN-SIP']
+        a = np.array(
+            [[0, 0, 5.33092692e-08, 3.73753773e-11, -2.02111473e-13],
+             [0, 2.44084308e-05, 2.81394789e-11, 5.17856895e-13, 0.0],
+             [-2.41334657e-07, 1.29289255e-10, 2.35753629e-14, 0.0, 0.0],
+             [-2.37162007e-10, 5.43714947e-13, 0.0, 0.0, 0.0],
+             [ -2.81029767e-13, 0.0, 0.0, 0.0, 0.0]]
+        )
+        b = np.array(
+            [[0, 0, 2.99270374e-05, -2.38136074e-10, 7.23205168e-13],
+             [0, -1.71073858e-07, 6.31243431e-11, -5.16744347e-14, 0.0],
+             [6.95458963e-06, -3.08278961e-10, -1.75800917e-13, 0.0, 0.0],
+             [3.51974159e-11, 5.60993016e-14, 0.0, 0.0, 0.0],
+             [-5.92438525e-13, 0.0, 0.0, 0.0, 0.0]]
+        )
+        sipwcs.sip = Sip(a, b, None, None, wcs.wcs.crpix)
+        sipwcs.wcs.set()
+        self.sipwcs = sipwcs
 
     def test_cutout(self):
         sizes = [3, 3*u.pixel, (3, 3), (3*u.pixel, 3*u.pix), (3., 3*u.pixel),
@@ -386,7 +410,7 @@ class TestCutout2D(object):
 
     def test_size_angle_without_wcs(self):
         with pytest.raises(ValueError):
-            Cutout2D(self.data, (2, 2), (3, 3* u.arcsec))
+            Cutout2D(self.data, (2, 2), (3, 3 * u.arcsec))
 
     def test_cutout_trim_overlap(self):
         c = Cutout2D(self.data, (0, 0), (3, 3), mode='trim')
@@ -405,7 +429,7 @@ class TestCutout2D(object):
     def test_cutout_partial_overlap_fill_value(self):
         fill_value = -99
         c = Cutout2D(self.data, (0, 0), (3, 3), mode='partial',
-                   fill_value=fill_value)
+                     fill_value=fill_value)
         assert c.data.shape == (3, 3)
         assert c.data[1, 1] == 0
         assert c.data[0, 0] == fill_value
@@ -448,7 +472,7 @@ class TestCutout2D(object):
 
     def test_skycoord_partial(self):
         c = Cutout2D(self.data, self.position, (3, 3), wcs=self.wcs,
-                   mode='partial')
+                     mode='partial')
         skycoord_original = self.position.from_pixel(c.center_original[1],
                                                      c.center_original[0],
                                                      self.wcs)
@@ -456,3 +480,23 @@ class TestCutout2D(object):
                                                    c.center_cutout[0], c.wcs)
         assert_quantity_allclose(skycoord_original.ra, skycoord_cutout.ra)
         assert_quantity_allclose(skycoord_original.dec, skycoord_cutout.dec)
+
+    def test_naxis_update(self):
+        xsize = 2
+        ysize = 3
+        c = Cutout2D(self.data, self.position, (ysize, xsize), wcs=self.wcs)
+        assert c.wcs._naxis[0] == xsize
+        assert c.wcs._naxis[1] == ysize
+
+    def test_crpix_maps_to_crval(self):
+        w = Cutout2D(self.data, (0, 0), (3, 3), wcs=self.sipwcs,
+                     mode='partial').wcs
+        pscale = np.sqrt(proj_plane_pixel_area(w))
+        assert_allclose(
+            w.wcs_pix2world(*w.wcs.crpix, 1), w.wcs.crval,
+            rtol=0.0, atol=1e-6 * pscale
+        )
+        assert_allclose(
+            w.all_pix2world(*w.wcs.crpix, 1), w.wcs.crval,
+            rtol=0.0, atol=1e-6 * pscale
+        )

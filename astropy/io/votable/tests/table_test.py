@@ -2,12 +2,10 @@
 """
 Test the conversion to/from astropy.table
 """
-
-# TEST_UNICODE_LITERALS
-
 import io
 import os
 
+import pathlib
 import numpy as np
 
 from ....utils.data import get_pkg_data_filename, get_pkg_data_fileobj
@@ -107,6 +105,17 @@ def test_names_over_ids():
         'Emag', '24mag', 'f_Name']
 
 
+def test_explicit_ids():
+    with get_pkg_data_fileobj('data/names.xml', encoding='binary') as fd:
+        votable = parse(fd)
+
+    table = votable.get_first_table().to_table(use_names_over_ids=False)
+
+    assert table.colnames == [
+        'col1', 'col2', 'col3', 'col4', 'col5', 'col6', 'col7', 'col8', 'col9',
+        'col10', 'col11', 'col12', 'col13', 'col14', 'col15', 'col16', 'col17']
+
+
 def test_table_read_with_unnamed_tables():
     """
     Issue #927
@@ -117,6 +126,17 @@ def test_table_read_with_unnamed_tables():
         t = Table.read(fd, format='votable')
 
     assert len(t) == 1
+
+
+def test_votable_path_object():
+    """
+    Testing when votable is passed as pathlib.Path object #4412.
+    """
+    fpath = pathlib.Path(get_pkg_data_filename('data/names.xml'))
+    table = parse(fpath).get_first_table().to_table()
+
+    assert len(table) == 1
+    assert int(table[0][3]) == 266
 
 
 def test_from_table_without_mask():
@@ -136,13 +156,17 @@ def test_write_with_format():
 
     output = io.BytesIO()
     t.write(output, format='votable', tabledata_format="binary")
-    assert b'BINARY' in output.getvalue()
-    assert b'TABLEDATA' not in output.getvalue()
+    obuff = output.getvalue()
+    assert b'VOTABLE version="1.3"' in obuff
+    assert b'BINARY' in obuff
+    assert b'TABLEDATA' not in obuff
 
     output = io.BytesIO()
     t.write(output, format='votable', tabledata_format="binary2")
-    assert b'BINARY2' in output.getvalue()
-    assert b'TABLEDATA' not in output.getvalue()
+    obuff = output.getvalue()
+    assert b'VOTABLE version="1.3"' in obuff
+    assert b'BINARY2' in obuff
+    assert b'TABLEDATA' not in obuff
 
 
 def test_empty_table():
@@ -150,4 +174,4 @@ def test_empty_table():
         get_pkg_data_filename('data/empty_table.xml'),
         pedantic=False)
     table = votable.get_first_table()
-    astropy_table = table.to_table()
+    astropy_table = table.to_table()  # noqa

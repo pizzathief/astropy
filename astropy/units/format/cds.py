@@ -1,19 +1,25 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICNSE.rst
 
+# This module includes files automatically generated from ply (these end in
+# _lextab.py and _parsetab.py). To generate these files, remove them from this
+# folder, then build astropy and run the tests in-place:
+#
+#   python setup.py build_ext --inplace
+#   pytest astropy/units
+#
+# You can then commit the changes to the re-generated _lextab.py and
+# _parsetab.py files.
+
 """
-Handles a "generic" string format for units
+Handles the CDS string format for units
 """
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
-import keyword
+import operator
 import os
 import re
 
-from ...extern import six
-from ...extern.six.moves import zip
 
 from .base import Base
 from . import core, utils
@@ -73,6 +79,7 @@ class CDS(Base):
 
     @classmethod
     def _make_lexer(cls):
+
         from ...extern.ply import lex
 
         tokens = cls._tokens
@@ -119,9 +126,15 @@ class CDS(Base):
             raise ValueError(
                 "Invalid character at col {0}".format(t.lexpos))
 
+        lexer_exists = os.path.exists(os.path.join(os.path.dirname(__file__),
+                                      'cds_lextab.py'))
+
         lexer = lex.lex(optimize=True, lextab='cds_lextab',
                         outputdir=os.path.dirname(__file__),
-                        reflags=re.UNICODE)
+                        reflags=int(re.UNICODE))
+
+        if not lexer_exists:
+            cls._add_tab_header('cds_lextab')
 
         return lexer
 
@@ -252,9 +265,15 @@ class CDS(Base):
         def p_error(p):
             raise ValueError()
 
+        parser_exists = os.path.exists(os.path.join(os.path.dirname(__file__),
+                                       'cds_parsetab.py'))
+
         parser = yacc.yacc(debug=False, tabmodule='cds_parsetab',
                            outputdir=os.path.dirname(__file__),
                            write_tables=True)
+
+        if not parser_exists:
+            cls._add_tab_header('cds_parsetab')
 
         return parser
 
@@ -265,7 +284,7 @@ class CDS(Base):
         except ValueError as e:
             raise ValueError(
                 "At col {0}, {1}".format(
-                    t.lexpos, six.text_type(e)))
+                    t.lexpos, str(e)))
 
     @classmethod
     def _parse_unit(cls, unit, detailed_exception=True):
@@ -286,7 +305,7 @@ class CDS(Base):
         if ' ' in s:
             raise ValueError('CDS unit must not contain whitespace')
 
-        if not isinstance(s, six.text_type):
+        if not isinstance(s, str):
             s = s.decode('ascii')
 
         # This is a short circuit for the case where the string
@@ -297,8 +316,8 @@ class CDS(Base):
             try:
                 return cls._parser.parse(s, lexer=cls._lexer, debug=debug)
             except ValueError as e:
-                if six.text_type(e):
-                    raise ValueError(six.text_type(e))
+                if str(e):
+                    raise ValueError(str(e))
                 else:
                     raise ValueError("Syntax error")
 
@@ -342,7 +361,7 @@ class CDS(Base):
 
             pairs = list(zip(unit.bases, unit.powers))
             if len(pairs) > 0:
-                pairs.sort(key=lambda x: x[1], reverse=True)
+                pairs.sort(key=operator.itemgetter(1), reverse=True)
 
                 s += cls._format_unit_list(pairs)
 

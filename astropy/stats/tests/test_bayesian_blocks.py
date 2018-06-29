@@ -1,13 +1,11 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
+import pytest
 import numpy as np
+from numpy.testing import assert_allclose
 
-from ...tests.helper import pytest
-from  numpy.testing import assert_allclose
-from .. import bayesian_blocks, Events, RegularEvents, PointMeasures
+from .. import bayesian_blocks, RegularEvents
 
 
 def test_single_change_point(rseed=0):
@@ -112,7 +110,7 @@ def test_errors():
 
     # sigma must be broadcastable with x
     with pytest.raises(ValueError):
-        bayesian_blocks(t, fitness='measures',  x=t, sigma=t[:-1])
+        bayesian_blocks(t, fitness='measures', x=t, sigma=t[:-1])
 
 
 def test_fitness_function_results():
@@ -122,14 +120,12 @@ def test_fitness_function_results():
     # Event Data
     t = rng.randn(100)
     edges = bayesian_blocks(t, fitness='events')
-    assert_allclose(edges, [-2.6197451, -1.97361952, -0.71094865,
-                            0.36866702, 1.85227818])
+    assert_allclose(edges, [-2.6197451, -0.71094865, 0.36866702, 1.85227818])
 
     # Event data with repeats
     t[80:] = t[:20]
     edges = bayesian_blocks(t, fitness='events', p0=0.01)
-    assert_allclose(edges, [-2.6197451, -1.97361952, -0.47432431,
-                            -0.46202823,  1.85227818])
+    assert_allclose(edges, [-2.6197451, -0.47432431, -0.46202823, 1.85227818])
 
     # Regular event data
     dt = 0.01

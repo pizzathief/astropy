@@ -1,17 +1,13 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-from __future__ import (absolute_import, unicode_literals, division,
-                        print_function)
-
+import pytest
 import numpy as np
-from numpy.testing.utils import assert_allclose
-from ..core import Model, InputParameterError, custom_model, render_model
+from inspect import signature
+from numpy.testing import assert_allclose
+
+from ..core import Model, custom_model
 from ..parameters import Parameter
 from .. import models
-
-from ...tests.helper import pytest, catch_warnings
-from ...utils.compat.funcsigs import signature
-from ...utils.exceptions import AstropyDeprecationWarning
 
 
 class NonFittableModel(Model):
@@ -20,8 +16,7 @@ class NonFittableModel(Model):
     a = Parameter()
 
     def __init__(self, a, model_set_axis=None):
-        super(NonFittableModel, self).__init__(
-            a, model_set_axis=model_set_axis)
+        super().__init__(a, model_set_axis=model_set_axis)
 
     @staticmethod
     def evaluate():
@@ -29,8 +24,8 @@ class NonFittableModel(Model):
 
 
 def test_Model_instance_repr_and_str():
-    m = NonFittableModel(42)
-    assert repr(m) == "<NonFittableModel(a=42.0)>"
+    m = NonFittableModel(42.5)
+    assert repr(m) == "<NonFittableModel(a=42.5)>"
     assert (str(m) ==
         "Model: NonFittableModel\n"
         "Inputs: ()\n"
@@ -39,18 +34,14 @@ def test_Model_instance_repr_and_str():
         "Parameters:\n"
         "     a  \n"
         "    ----\n"
-        "    42.0")
+        "    42.5")
 
     assert len(m) == 1
 
 
 def test_Model_array_parameter():
-    m = NonFittableModel([[42, 43], [1,2]])
-    m = NonFittableModel([42, 43, 44, 45])
-
-    phi, theta, psi = 42, 43, 44
-    model = models.RotateNative2Celestial(phi, theta, psi)
-    assert_allclose(model.param_sets, [[42], [43], [44]])
+    model = models.Gaussian1D(4, 2, 1)
+    assert_allclose(model.param_sets, [[4], [2], [1]])
 
 
 def test_inputless_model():
@@ -88,15 +79,6 @@ def test_inputless_model():
     assert np.all(m() == [[1, 2, 3], [4, 5, 6]])
 
 
-def test_Model_add_model():
-    m = models.Gaussian1D(1,2,3)
-    m.add_model(m, 'p')
-    m.add_model(m, 's')
-    with pytest.raises(InputParameterError):
-        m.add_model(m, 'q')
-        m.add_model(m, 42)
-
-
 def test_ParametericModel():
     with pytest.raises(TypeError):
         models.Gaussian1D(1, 2, 3, wrong=4)
@@ -115,9 +97,11 @@ def test_custom_model_signature():
     assert model_a.param_names == ()
     assert model_a.n_inputs == 1
     sig = signature(model_a.__init__)
-    assert list(sig.parameters.keys()) == ['self', 'args', 'kwargs']
+    assert list(sig.parameters.keys()) == ['self', 'args', 'meta', 'name', 'kwargs']
     sig = signature(model_a.__call__)
-    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis']
+    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis',
+                                           'with_bounding_box', 'fill_value',
+                                           'equivalencies']
 
     @custom_model
     def model_b(x, a=1, b=2):
@@ -129,7 +113,9 @@ def test_custom_model_signature():
     assert list(sig.parameters.keys()) == ['self', 'a', 'b', 'kwargs']
     assert [x.default for x in sig.parameters.values()] == [sig.empty, 1, 2, sig.empty]
     sig = signature(model_b.__call__)
-    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis']
+    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis',
+                                           'with_bounding_box', 'fill_value',
+                                           'equivalencies']
 
     @custom_model
     def model_c(x, y, a=1, b=2):
@@ -141,7 +127,9 @@ def test_custom_model_signature():
     assert list(sig.parameters.keys()) == ['self', 'a', 'b', 'kwargs']
     assert [x.default for x in sig.parameters.values()] == [sig.empty, 1, 2, sig.empty]
     sig = signature(model_c.__call__)
-    assert list(sig.parameters.keys()) == ['self', 'x', 'y', 'model_set_axis']
+    assert list(sig.parameters.keys()) == ['self', 'x', 'y', 'model_set_axis',
+                                           'with_bounding_box', 'fill_value',
+                                           'equivalencies']
 
 
 def test_custom_model_subclass():
@@ -155,7 +143,7 @@ def test_custom_model_subclass():
         # Override the evaluate from model_a
         @classmethod
         def evaluate(cls, x, a):
-            return -super(model_b, cls).evaluate(x, a)
+            return -super().evaluate(x, a)
 
     b = model_b()
     assert b.param_names == ('a',)
@@ -165,7 +153,9 @@ def test_custom_model_subclass():
     sig = signature(model_b.__init__)
     assert list(sig.parameters.keys()) == ['self', 'a', 'kwargs']
     sig = signature(model_b.__call__)
-    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis']
+    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis',
+                                           'with_bounding_box', 'fill_value',
+                                           'equivalencies']
 
 
 def test_custom_model_parametrized_decorator():
@@ -201,11 +191,7 @@ def test_custom_inverse():
     assert_allclose(x, p(p.inverse(x)))
     assert_allclose(x, p.inverse(p(x)))
 
-    with catch_warnings(AstropyDeprecationWarning) as w:
-        p.inverse = None
-
-    # TODO: This can be removed after Astropy v1.1 or so
-    assert len(w) == 1
+    p.inverse = None
 
     with pytest.raises(NotImplementedError):
         p.inverse
@@ -217,6 +203,7 @@ def test_custom_inverse_reset():
     class TestModel(Model):
         inputs = ()
         outputs = ('y',)
+
         @property
         def inverse(self):
             return models.Shift()
@@ -239,43 +226,52 @@ def test_custom_inverse_reset():
 
 
 def test_render_model_2d():
-
     imshape = (71, 141)
     image = np.zeros(imshape)
     coords = y, x = np.indices(imshape)
 
-    model = models.Gaussian2D(x_stddev=6.1, y_stddev=3.9, theta=np.pi / 4)
+    model = models.Gaussian2D(x_stddev=6.1, y_stddev=3.9, theta=np.pi / 3)
 
     # test points for edges
     ye, xe = [0, 35, 70], [0, 70, 140]
     # test points for floating point positions
     yf, xf = [35.1, 35.5, 35.9], [70.1, 70.5, 70.9]
 
-    test_pts = [(a, b) for a in xe for b in ye] + [(a, b) for a in xf for b in yf]
+    test_pts = [(a, b) for a in xe for b in ye]
+    test_pts += [(a, b) for a in xf for b in yf]
 
     for x0, y0 in test_pts:
         model.x_mean = x0
         model.y_mean = y0
         expected = model(x, y)
-        for im in [image, None]:
-            for xy in [coords, None]:
+        for xy in [coords, None]:
+            for im in [image.copy(), None]:
                 if (im is None) & (xy is None):
                     # this case is tested in Fittable2DModelTester
                     continue
-                actual = render_model(model, arr=image, coords=xy)
+                actual = model.render(out=im, coords=xy)
+                if im is None:
+                    assert_allclose(actual, model.render(coords=xy))
                 # assert images match
-                assert_allclose(expected, actual, atol=2e-7)
-                # assert flux conserved
-                assert ((np.sum(expected) - np.sum(actual)) / np.sum(expected)) < 1e-7
+                assert_allclose(expected, actual, atol=3e-7)
+                # assert model fully captured
+                if (x0, y0) == (70, 35):
+                    boxed = model.render()
+                    flux = np.sum(expected)
+                    assert ((flux - np.sum(boxed)) / flux) < 1e-7
+    # test an error is raised when the bounding box is larger than the input array
+    try:
+        actual = model.render(out=np.zeros((1, 1)))
+    except ValueError:
+        pass
 
 
 def test_render_model_1d():
-
     npix = 101
     image = np.zeros(npix)
     coords = np.arange(npix)
 
-    model = models.Gaussian1D(stddev=49.5)
+    model = models.Gaussian1D()
 
     # test points
     test_pts = [0, 49.1, 49.5, 49.9, 100]
@@ -283,20 +279,23 @@ def test_render_model_1d():
     # test widths
     test_stdv = np.arange(5.5, 6.7, .2)
 
-    for x0, stdv in zip(test_pts, test_stdv):
+    for x0, stdv in [(p, s) for p in test_pts for s in test_stdv]:
         model.mean = x0
         model.stddev = stdv
         expected = model(coords)
-        for im in [image, None]:
-            for x in [coords, None]:
+        for x in [coords, None]:
+            for im in [image.copy(), None]:
                 if (im is None) & (x is None):
                     # this case is tested in Fittable1DModelTester
                     continue
-                actual = render_model(model, arr=image, coords=x)
+                actual = model.render(out=im, coords=x)
                 # assert images match
-                assert_allclose(expected, actual, atol=2e-7)
-                # assert flux conserved
-                assert ((np.sum(expected) - np.sum(actual)) / np.sum(expected)) < 1e-7
+                assert_allclose(expected, actual, atol=3e-7)
+                # assert model fully captured
+                if (x0, stdv) == (49.5, 5.5):
+                    boxed = model.render()
+                    flux = np.sum(expected)
+                    assert ((flux - np.sum(boxed)) / flux) < 1e-7
 
 
 def test_render_model_3d():
@@ -309,7 +308,12 @@ def test_render_model_3d():
         val = (rsq < 1) * amp
         return val
 
-    Ellipsoid3D = models.custom_model(ellipsoid)
+    class Ellipsoid3D(custom_model(ellipsoid)):
+        @property
+        def bounding_box(self):
+            return ((self.z0 - self.c, self.z0 + self.c),
+                    (self.y0 - self.b, self.y0 + self.b),
+                    (self.x0 - self.a, self.x0 + self.a))
 
     model = Ellipsoid3D()
 
@@ -321,17 +325,58 @@ def test_render_model_3d():
     test_pts = [(x, y, z) for x in xe for y in ye for z in ze]
     test_pts += [(x, y, z) for x in xf for y in yf for z in zf]
 
-    for x0, y0, z0 in [(8,10,13)]:#test_pts:
+    for x0, y0, z0 in test_pts:
         model.x0 = x0
         model.y0 = y0
         model.z0 = z0
         expected = model(*coords[::-1])
-        for im in [image, None]:
-            for c in [coords, None]:
+        for c in [coords, None]:
+            for im in [image.copy(), None]:
                 if (im is None) & (c is None):
                     continue
-                actual = render_model(model, arr=image, coords=c)
+                actual = model.render(out=im, coords=c)
+                boxed = model.render()
                 # assert images match
                 assert_allclose(expected, actual)
-                # assert flux conserved
-                assert ((np.sum(expected) - np.sum(actual)) / np.sum(expected)) == 0
+                # assert model fully captured
+                if (z0, y0, x0) == (8, 10, 13):
+                    boxed = model.render()
+                    assert (np.sum(expected) - np.sum(boxed)) == 0
+
+
+def test_custom_bounding_box_1d():
+    """
+    Tests that the bounding_box setter works.
+    """
+    # 1D models
+    g1 = models.Gaussian1D()
+    bb = g1.bounding_box
+    expected = g1.render()
+
+    # assign the same bounding_box, now through the bounding_box setter
+    g1.bounding_box = bb
+    assert_allclose(g1.render(), expected)
+
+    # 2D models
+    g2 = models.Gaussian2D()
+    bb = g2.bounding_box
+    expected = g2.render()
+
+    # assign the same bounding_box, now through the bounding_box setter
+    g2.bounding_box = bb
+    assert_allclose(g2.render(), expected)
+
+
+def test_n_submodels_in_single_models():
+    assert models.Gaussian1D.n_submodels() == 1
+    assert models.Gaussian2D.n_submodels() == 1
+
+
+def test_compound_deepcopy():
+    model = (models.Gaussian1D(10, 2,3) | models.Shift(2)) & models.Rotation2D(21.3)
+    new_model = model.deepcopy()
+    assert id(model) != id(new_model)
+    assert id(model._submodels) != id(new_model._submodels)
+    assert id(model._submodels[0]) != id(new_model._submodels[0])
+    assert id(model._submodels[1]) != id(new_model._submodels[1])
+    assert id(model._submodels[2]) != id(new_model._submodels[2])

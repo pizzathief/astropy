@@ -6,8 +6,6 @@ makes a subprocess call to xmllint.  This could use a Python-based
 library at some point in the future, if something appropriate could be
 found.
 """
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 
 import os
@@ -42,7 +40,7 @@ def validate_schema(filename, schema_file):
         raise TypeError("schema_file must be a path to an XML Schema or DTD")
 
     p = subprocess.Popen(
-        "xmllint --noout --nonet %s %s" % (schema_part, filename),
+        "xmllint --noout --nonet {} {}".format(schema_part, filename),
         shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = p.communicate()
 

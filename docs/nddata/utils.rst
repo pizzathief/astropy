@@ -1,10 +1,10 @@
 .. _nddata_utils:
 
-astropy.nddata.utils
-====================
+Image utilities
+***************
 
 Overview
---------
+========
 
 The `astropy.nddata.utils` module includes general utility functions
 for array operations.
@@ -12,10 +12,10 @@ for array operations.
 .. _cutout_images:
 
 2D Cutout Images
-----------------
+================
 
 Getting Started
-^^^^^^^^^^^^^^^
+---------------
 
 The `~astropy.nddata.utils.Cutout2D` class can be used to create a
 postage stamp cutout image from a 2D array.  If an optional
@@ -139,11 +139,11 @@ including::
     (25, 20)
 
     >>> # (non-rounded) input position in both the original and cutout arrays
-    >>> print(cutout.input_position_original, cutout.input_position_cutout)    # doctest: +FLOAT_CMP
+    >>> print((cutout.input_position_original, cutout.input_position_cutout))  # doctest: +FLOAT_CMP
     ((49.7, 100.1), (24.700000000000003, 20.099999999999994))
 
     >>> # the origin pixel in both arrays
-    >>> print(cutout.origin_original, cutout.origin_cutout)
+    >>> print((cutout.origin_original, cutout.origin_cutout))
     ((25, 80), (0, 0))
 
     >>> # tuple of slice objects for the original array
@@ -165,7 +165,7 @@ pixel positions between the original and cutout arrays::
 
 
 2D Cutout modes
-^^^^^^^^^^^^^^^
+---------------
 
 There are three modes for creating cutout arrays, ``'trim'``,
 ``'partial'``, and ``'strict'``.  For the ``'partial'`` and ``'trim'``
@@ -185,12 +185,12 @@ that are smaller than the requested ``size``::
 
     >>> data2 = np.arange(20.).reshape(5, 4)
     >>> cutout1 = Cutout2D(data2, (0, 0), (3, 3), mode='trim')
-    >>> print(cutout1.data)
-    [[ 0.  1.]
-     [ 4.  5.]]
+    >>> print(cutout1.data)  # doctest: +FLOAT_CMP
+    [[0. 1.]
+     [4. 5.]]
     >>> print(cutout1.shape)
     (2, 2)
-    >>> print(cutout1.position_original, cutout1.position_cutout)
+    >>> print((cutout1.position_original, cutout1.position_cutout))
     ((0, 0), (0, 0))
 
 With ``mode='partial'``, the cutout will never be trimmed.  Instead it
@@ -198,18 +198,18 @@ will be filled with ``fill_value`` (the default is ``numpy.nan``) if
 the cutout is not fully contained in the data array::
 
     >>> cutout2 = Cutout2D(data2, (0, 0), (3, 3), mode='partial')
-    >>> print(cutout2.data)
-    [[ nan  nan  nan]
-     [ nan   0.   1.]
-     [ nan   4.   5.]]
+    >>> print(cutout2.data)  # doctest: +FLOAT_CMP
+    [[nan nan nan]
+     [nan  0.  1.]
+     [nan  4.  5.]]
 
 Note that for the ``'partial'`` mode, the positions (and several other
 attributes) are calculated for on the *valid* (non-filled) cutout
 values::
 
-    >>> print(cutout2.position_original, cutout2.position_cutout)
+    >>> print((cutout2.position_original, cutout2.position_cutout))
     ((0, 0), (1, 1))
-    >>> print(cutout2.origin_original, cutout2.origin_cutout)
+    >>> print((cutout2.origin_original, cutout2.origin_cutout))
     ((0, 0), (1, 1))
     >>> print(cutout2.slices_original)
     (slice(0, 2, None), slice(0, 2, None))
@@ -226,7 +226,7 @@ fully contained in the data array:
 
 
 2D Cutout from a `~astropy.coordinates.SkyCoord` position
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+---------------------------------------------------------
 
 The input ``position`` can also be specified as a
 `~astropy.coordinates.SkyCoord`, in which case a `~astropy.wcs.WCS`
@@ -245,7 +245,8 @@ your FITS header)::
     >>> wcs.wcs.cd = [[scale*np.cos(rho), -scale*np.sin(rho)],
     ...               [scale*np.sin(rho), scale*np.cos(rho)]]
     >>> wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
-    >>> wcs.wcs.crval = [position.ra.value, position.dec.value]
+    >>> wcs.wcs.crval = [position.ra.to_value(u.deg),
+    ...                  position.dec.to_value(u.deg)]
     >>> wcs.wcs.crpix = [50, 100]
 
 Now let's create the cutout array using the
@@ -286,7 +287,7 @@ positions::
     >>> x_cutout, y_cutout = (5, 10)
     >>> pixel_to_skycoord(x_cutout, y_cutout, cutout.wcs)    # doctest: +FLOAT_CMP
     <SkyCoord (ICRS): (ra, dec) in deg
-        (197.8747893, -1.32207626)>
+        ( 197.8747893, -1.32207626)>
 
 We now find the corresponding pixel in the original ``data`` array and
 its sky coordinates::
@@ -294,14 +295,14 @@ its sky coordinates::
     >>> x_data, y_data = cutout.to_original_position((x_cutout, y_cutout))
     >>> pixel_to_skycoord(x_data, y_data, wcs)    # doctest: +FLOAT_CMP
     <SkyCoord (ICRS): (ra, dec) in deg
-        (197.8747893, -1.32207626)>
+        ( 197.8747893, -1.32207626)>
 
 As expected, the sky coordinates in the original ``data`` and the
 cutout array agree.
 
 
 2D Cutout using an angular ``size``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-----------------------------------
 
 The input ``size`` can also be specified as a
 `~astropy.units.Quantity` in angular units, e.g. degrees, arcminutes,
@@ -339,7 +340,6 @@ position, and ``wcs`` object from above to create a cutout with size
     size = u.Quantity((1.5, 2.5), u.arcsec)
     cutout = Cutout2D(data, position, size, wcs=wcs)
     plt.imshow(cutout.data, origin='lower')
-
 
 Reference/API
 =============

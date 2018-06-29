@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
+import numpy as np
 
 
 __doctest_skip__ = ['quantity_support']
 
 
-import numpy as np
-
-
-def quantity_support():
+def quantity_support(format='latex_inline'):
     """
     Enable support for plotting `astropy.units.Quantity` instances in
     matplotlib.
@@ -28,6 +24,13 @@ def quantity_support():
       ...     plt.plot([101, 125, 150] * u.cm)
       [...]
       ...     plt.draw()
+
+    Parameters
+    ----------
+    format : `astropy.units.format.Base` instance or str
+        The name of a format or a formatter object.  If not
+        provided, defaults to ``latex_inline``.
+
     """
     from .. import units as u
 
@@ -70,13 +73,15 @@ def quantity_support():
                     label=unit.to_string(),
                 )
             elif unit is not None:
-                return units.AxisInfo(label=unit.to_string('unicode'))
+                return units.AxisInfo(label=unit.to_string(format))
             return None
 
         @staticmethod
         def convert(val, unit, axis):
             if isinstance(val, u.Quantity):
-                return val.to(unit)
+                return val.to_value(unit)
+            elif isinstance(val, list) and isinstance(val[0], u.Quantity):
+                return [v.to_value(unit) for v in val]
             else:
                 return val
 

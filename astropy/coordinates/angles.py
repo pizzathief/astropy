@@ -5,25 +5,18 @@
 This module contains the fundamental classes used for representing
 coordinates in astropy.
 """
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
-import math
 from collections import namedtuple
 
 import numpy as np
 
-from ..extern import six
 from . import angle_utilities as util
 from .. import units as u
 from ..utils import isiterable
-from ..utils.compat import NUMPY_LT_1_7
-
+from ..utils.compat import NUMPY_LT_1_14_1, NUMPY_LT_1_14_2
 
 __all__ = ['Angle', 'Latitude', 'Longitude']
 
-
-TWOPI = math.pi * 2.0  # no need to calculate this all the time
 
 # these are used by the `hms` and `dms` attributes
 hms_tuple = namedtuple('hms_tuple', ('h', 'm', 's'))
@@ -31,7 +24,7 @@ dms_tuple = namedtuple('dms_tuple', ('d', 'm', 's'))
 signed_dms_tuple = namedtuple('signed_dms_tuple', ('sign', 'd', 'm', 's'))
 
 
-class Angle(u.Quantity):
+class Angle(u.SpecificTypeQuantity):
     """
     One or more angular value(s) with units equivalent to radians or degrees.
 
@@ -46,11 +39,12 @@ class Angle(u.Quantity):
       Angle('1:2:30.43 degrees')
       Angle('1 2 0 hours')
       Angle(np.arange(1, 8), unit=u.deg)
-      Angle(u'1°2′3″')
+      Angle('1°2′3″')
       Angle('1d2m3.4s')
       Angle('-1h2m3s')
       Angle('-1h2.5m')
       Angle('-1:2.5', unit=u.deg)
+      Angle((10, 11, 12), unit='hourangle')  # (h, m, s)
       Angle((-1, 2, 3), unit=u.deg)  # (d, m, s)
       Angle(10.2345 * u.deg)
       Angle(Angle(10.2345 * u.deg))
@@ -83,59 +77,36 @@ class Angle(u.Quantity):
     `~astropy.units.UnitsError`
         If a unit is not provided or it is not an angular unit.
     """
+    _equivalent_unit = u.radian
     _include_easy_conversion_members = True
 
     def __new__(cls, angle, unit=None, dtype=None, copy=True):
-        unit = cls._convert_unit_to_angle_unit(unit)
-        if (unit is not None and not unit.is_equivalent(u.radian)):
-            raise u.UnitsError("Requested unit {0} is not convertible to an "
-                               "angle".format(unit))
 
-        if isinstance(angle, u.Quantity):
-            # This includes Angle subclasses as well
+        if not isinstance(angle, u.Quantity):
             if unit is not None:
-                angle = angle.to(unit).value
-            else:
-                unit = angle.unit
-                unit = cls._convert_unit_to_angle_unit(unit)
-                if not unit.is_equivalent(u.radian):
-                    raise u.UnitsError(
-                        "Given quantity {0} is not convertible to an "
-                        "angle".format(angle))
+                unit = cls._convert_unit_to_angle_unit(u.Unit(unit))
 
-                angle = angle.value
-        else:
-            # this does nothing if it's not a tuple
-            angle = cls._tuple_to_float(angle, unit)
-
-            if isinstance(angle, six.string_types):
-                angle, new_unit = util.parse_angle(angle, unit)
-                if new_unit is not None and unit is None:
-                    unit = new_unit
+            if isinstance(angle, tuple):
                 angle = cls._tuple_to_float(angle, unit)
-                if new_unit is not None and unit is not None and new_unit != unit:
-                    angle = new_unit.to(unit, angle)
+
+            elif isinstance(angle, str):
+                angle, angle_unit = util.parse_angle(angle, unit)
+                if angle_unit is None:
+                    angle_unit = unit
+
+                if isinstance(angle, tuple):
+                    angle = cls._tuple_to_float(angle, angle_unit)
+
+                if angle_unit is not unit:
+                    # Possible conversion to `unit` will be done below.
+                    angle = u.Quantity(angle, angle_unit, copy=False)
+
             elif (isiterable(angle) and
                   not (isinstance(angle, np.ndarray) and
                        angle.dtype.kind not in 'SUVO')):
-                angle = [Angle(x, unit) for x in angle]
-                if unit is None:
-                    unit = angle[0].unit
-                angle = [x.to(unit) for x in angle]
+                angle = [Angle(x, unit, copy=False) for x in angle]
 
-        self = super(Angle, cls).__new__(cls, angle, unit, dtype=dtype,
-                                         copy=copy)
-
-        if self.unit is u.dimensionless_unscaled:
-            raise u.UnitsError("No unit was given - must be some kind of angle")
-        elif not self.unit.is_equivalent(u.radian):
-            raise u.UnitsError("Unit {0} is not an angle".format(self.unit))
-
-        if self.dtype.kind not in 'iuf':
-                raise TypeError("Unsupported dtype for "
-                                "Angle:'{0}'".format(angle.dtype))
-
-        return self
+        return super().__new__(cls, angle, unit, dtype=dtype, copy=copy)
 
     @staticmethod
     def _tuple_to_float(angle, unit):
@@ -143,33 +114,21 @@ class Angle(u.Quantity):
         Converts an angle represented as a 3-tuple or 2-tuple into a floating
         point number in the given unit.
         """
-        if isinstance(angle, tuple):
-            # TODO: Numpy array of tuples?
-            if unit is u.hourangle:
-                angle = util.hms_to_hours(*angle)
-            elif unit is u.degree:
-                angle = util.dms_to_degrees(*angle)
-            else:
-                raise u.UnitsError(
-                    "Can not parse '{0}' as unit '{1}'".format(
-                        angle, unit))
-        return angle
+        # TODO: Numpy array of tuples?
+        if unit == u.hourangle:
+            return util.hms_to_hours(*angle)
+        elif unit == u.degree:
+            return util.dms_to_degrees(*angle)
+        else:
+            raise u.UnitsError("Can not parse '{0}' as unit '{1}'"
+                               .format(angle, unit))
 
     @staticmethod
     def _convert_unit_to_angle_unit(unit):
-        if unit is not None:
-            unit = u.Unit(unit)
+        return u.hourangle if unit is u.hour else unit
 
-            if unit is u.hour:
-                unit = u.hourangle
-        return unit
-
-    def __quantity_subclass__(self, unit):
-        unit = self._convert_unit_to_angle_unit(unit)
-        if unit.is_equivalent(u.radian):
-            return Angle, True
-        else:
-            return super(Angle, self).__quantity_subclass__(unit)[0], False
+    def _set_unit(self, unit):
+        super()._set_unit(self._convert_unit_to_angle_unit(unit))
 
     @property
     def hour(self):
@@ -277,7 +236,8 @@ class Angle(u.Quantity):
         """
         if unit is None:
             unit = self.unit
-        unit = self._convert_unit_to_angle_unit(unit)
+        else:
+            unit = self._convert_unit_to_angle_unit(u.Unit(unit))
 
         separators = {
             None: {
@@ -332,13 +292,13 @@ class Angle(u.Quantity):
 
         elif unit.is_equivalent(u.radian):
             if decimal:
-                values = self.to(unit).value
+                values = self.to_value(unit)
                 if precision is not None:
                     func = ("{0:1." + str(precision) + "f}").format
                 else:
                     func = "{0:g}".format
             elif sep == 'fromunit':
-                values = self.to(unit).value
+                values = self.to_value(unit)
                 unit_string = unit.to_string(format=format)
                 if format == 'latex':
                     unit_string = unit_string[1:-1]
@@ -370,18 +330,8 @@ class Angle(u.Quantity):
                 s = '${0}$'.format(s)
             return s
 
-        if NUMPY_LT_1_7 and not np.isscalar(values):  # pragma: no cover
-            format_ufunc = np.vectorize(do_format, otypes=[np.object])
-            # In Numpy 1.6, unicode output is broken.  vectorize always seems to
-            # yield U2 even if you tell it something else.  So we convert in
-            # a second step with 60 chars, on the theory that you'll never want
-            # better than what double-precision decimals give, which end up
-            # around that many characters.
-            result = format_ufunc(values).astype('U60')
-        else:
-            #for newer Numpy versions, this just works as you would expect
-            format_ufunc = np.vectorize(do_format, otypes=['U'])
-            result = format_ufunc(values)
+        format_ufunc = np.vectorize(do_format, otypes=['U'])
+        result = format_ufunc(values)
 
         if result.ndim == 0:
             result = result[()]
@@ -403,12 +353,12 @@ class Angle(u.Quantity):
           >>> import astropy.units as u
           >>> a = Angle([-20.0, 150.0, 350.0] * u.deg)
 
-          >>> a.wrap_at(360 * u.deg).degree  # Wrap into range 0 to 360 degrees
-          array([ 340.,  150.,  350.])
+          >>> a.wrap_at(360 * u.deg).degree  # Wrap into range 0 to 360 degrees  # doctest: +FLOAT_CMP
+          array([340., 150., 350.])
 
-          >>> a.wrap_at('180d', inplace=True)  # Wrap into range -180 to 180 degrees
-          >>> a.degree
-          array([ -20.,  150.,  -10.])
+          >>> a.wrap_at('180d', inplace=True)  # Wrap into range -180 to 180 degrees  # doctest: +FLOAT_CMP
+          >>> a.degree  # doctest: +FLOAT_CMP
+          array([-20., 150., -10.])
 
         Parameters
         ----------
@@ -476,22 +426,38 @@ class Angle(u.Quantity):
             ok &= np.all(self < Angle(upper))
         return bool(ok)
 
+    def _str_helper(self, format=None):
+        if self.isscalar:
+            return self.to_string(format=format)
+
+        if NUMPY_LT_1_14_1 or not NUMPY_LT_1_14_2:
+            def formatter(x):
+                return x.to_string(format=format)
+        else:
+            # In numpy 1.14.1, array2print formatters get passed plain numpy scalars instead
+            # of subclass array scalars, so we need to recreate an array scalar.
+            def formatter(x):
+                return self._new_view(x).to_string(format=format)
+
+        return np.array2string(self, formatter={'all': formatter})
+
     def __str__(self):
-        return str(self.to_string())
+        return self._str_helper()
 
     def _repr_latex_(self):
-        if self.isscalar:
-            return self.to_string(format='latex')
-        else:
-            # Need to do a magic incantation to convert to str.  Regular str
-            # or array2string causes all backslashes to get doubled.
-            if NUMPY_LT_1_7:
-                # Except that numpy 1.6 doesn't do formatter... so instead we
-                # just replace all double-backslashes with one.
-                return str(self.to_string(format='latex')).replace('\\\\', '\\')
-            else:
-                return np.array2string(self.to_string(format='latex'),
-                                       formatter={'str_kind': lambda x: x})
+        return self._str_helper(format='latex')
+
+
+def _no_angle_subclass(obj):
+    """Return any Angle subclass objects as an Angle objects.
+
+    This is used to ensure that Latitude and Longitude change to Angle
+    objects when they are used in calculations (such as lon/2.)
+    """
+    if isinstance(obj, tuple):
+        return tuple(_no_angle_subclass(_obj) for _obj in obj)
+
+    return obj.view(Angle) if isinstance(obj, Angle) else obj
 
 
 class Latitude(Angle):
@@ -505,7 +471,7 @@ class Latitude(Angle):
       -90.0 * u.deg <= angle(s) <= +90.0 * u.deg
 
     Any attempt to set a value outside that range will result in a
-    `~.exceptions.ValueError`.
+    `ValueError`.
 
     The input angle(s) can be specified either as an array, list,
     scalar, tuple (see below), string,
@@ -544,7 +510,7 @@ class Latitude(Angle):
         # Forbid creating a Lat from a Long.
         if isinstance(angle, Longitude):
             raise TypeError("A Latitude angle cannot be created from a Longitude angle")
-        self = super(Latitude, cls).__new__(cls, angle, unit=unit, **kwargs)
+        self = super().__new__(cls, angle, unit=unit, **kwargs)
         self._validate_angles()
         return self
 
@@ -570,16 +536,20 @@ class Latitude(Angle):
             raise TypeError("A Longitude angle cannot be assigned to a Latitude angle")
         # first check bounds
         self._validate_angles(value)
-        super(Latitude, self).__setitem__(item, value)
+        super().__setitem__(item, value)
 
     # Any calculation should drop to Angle
     def __array_wrap__(self, obj, context=None):
-        obj = super(Angle, self).__array_wrap__(obj, context=context)
+        obj = super().__array_wrap__(obj, context=context)
+        return _no_angle_subclass(obj)
 
-        if isinstance(obj, Angle):
-            return obj.view(Angle)
+    def __array_ufunc__(self, *args, **kwargs):
+        results = super().__array_ufunc__(*args, **kwargs)
+        return _no_angle_subclass(results)
 
-        return obj
+
+class LongitudeInfo(u.QuantityInfo):
+    _represent_as_dict_attrs = u.QuantityInfo._represent_as_dict_attrs + ('wrap_angle',)
 
 
 class Longitude(Angle):
@@ -638,21 +608,25 @@ class Longitude(Angle):
     """
 
     _wrap_angle = None
+    _default_wrap_angle = Angle(360 * u.deg)
+    info = LongitudeInfo()
 
     def __new__(cls, angle, unit=None, wrap_angle=None, **kwargs):
         # Forbid creating a Long from a Lat.
         if isinstance(angle, Latitude):
-            raise TypeError("A Longitude angle cannot be created from a Latitude angle")
-        self = super(Longitude, cls).__new__(cls, angle, unit=unit, **kwargs)
-        self.wrap_angle = (wrap_angle if wrap_angle is not None
-                           else getattr(angle, 'wrap_angle', 360 * u.deg))
+            raise TypeError("A Longitude angle cannot be created from "
+                            "a Latitude angle.")
+        self = super().__new__(cls, angle, unit=unit, **kwargs)
+        if wrap_angle is None:
+            wrap_angle = getattr(angle, 'wrap_angle', self._default_wrap_angle)
+        self.wrap_angle = wrap_angle
         return self
 
     def __setitem__(self, item, value):
         # Forbid assigning a Lat to a Long.
         if isinstance(value, Latitude):
             raise TypeError("A Latitude angle cannot be assigned to a Longitude angle")
-        super(Longitude, self).__setitem__(item, value)
+        super().__setitem__(item, value)
         self._wrap_internal()
 
     def _wrap_internal(self):
@@ -665,14 +639,14 @@ class Longitude(Angle):
         # this Angle, then do all the math on raw Numpy arrays rather
         # than Quantity objects for speed.
         a360 = u.degree.to(self.unit, 360.0)
-        wrap_angle = self.wrap_angle.to(self.unit).value
+        wrap_angle = self.wrap_angle.to_value(self.unit)
         wrap_angle_floor = wrap_angle - a360
         self_angle = self.value
         # Do the wrapping, but only if any angles need to be wrapped
         if np.any(self_angle < wrap_angle_floor) or np.any(self_angle >= wrap_angle):
             wrapped = np.mod(self_angle - wrap_angle, a360) + wrap_angle_floor
             value = u.Quantity(wrapped, self.unit)
-            super(Longitude, self).__setitem__((), value)
+            super().__setitem__((), value)
 
     @property
     def wrap_angle(self):
@@ -684,104 +658,15 @@ class Longitude(Angle):
         self._wrap_internal()
 
     def __array_finalize__(self, obj):
-        super(Longitude, self).__array_finalize__(obj)
-        self._wrap_angle = getattr(obj, '_wrap_angle', 360 * u.deg)
+        super().__array_finalize__(obj)
+        self._wrap_angle = getattr(obj, '_wrap_angle',
+                                   self._default_wrap_angle)
 
     # Any calculation should drop to Angle
     def __array_wrap__(self, obj, context=None):
-        obj = super(Angle, self).__array_wrap__(obj, context=context)
+        obj = super().__array_wrap__(obj, context=context)
+        return _no_angle_subclass(obj)
 
-        if isinstance(obj, Angle):
-            return obj.view(Angle)
-
-        return obj
-
-#<----------------------------------Rotations--------------------------------->
-
-
-def rotation_matrix(angle, axis='z', unit=None):
-    """
-    Generate a 3x3 cartesian rotation matrix in for rotation about
-    a particular axis.
-
-    Parameters
-    ----------
-    angle : convertible to `Angle`
-        The amount of rotation this matrix should represent.
-
-    axis : str or 3-sequence
-        Either ``'x'``, ``'y'``, ``'z'``, or a (x,y,z) specifying an
-        axis to rotate about. If ``'x'``, ``'y'``, or ``'z'``, the
-        rotation sense is counterclockwise looking down the + axis
-        (e.g. positive rotations obey left-hand-rule).
-
-    unit : UnitBase, optional
-        If ``angle`` does not have associated units, they are in this
-        unit.  If neither are provided, it is assumed to be degrees.
-
-    Returns
-    -------
-    rmat: `numpy.matrix`
-        A unitary rotation matrix.
-    """
-    if unit is None:
-        unit = u.degree
-
-    angle = Angle(angle, unit=unit)
-
-    s = np.sin(angle)
-    c = np.cos(angle)
-
-    # use optimized implementations for x/y/z
-    if axis == 'z':
-        return np.matrix(((c, s, 0),
-                          (-s, c, 0),
-                          (0, 0, 1)))
-    elif axis == 'y':
-        return np.matrix(((c, 0, -s),
-                          (0, 1, 0),
-                          (s, 0, c)))
-    elif axis == 'x':
-        return np.matrix(((1, 0, 0),
-                          (0, c, s),
-                          (0, -s, c)))
-    else:
-        axis = np.asarray(axis)
-        axis = axis / np.sqrt((axis * axis).sum())
-
-        R = np.diag((c, c, c))
-        R += np.outer(axis, axis) * (1. - c)
-        axis *= s
-        R += np.array([[0., axis[2], -axis[1]],
-                       [-axis[2], 0., axis[0]],
-                       [axis[1], -axis[0], 0.]])
-        return R.view(np.matrix)
-
-
-def angle_axis(matrix):
-    """
-    Computes the angle of rotation and the rotation axis for a given rotation
-    matrix.
-
-    Parameters
-    ----------
-    matrix : array-like
-        A 3 x 3 unitary rotation matrix.
-
-    Returns
-    -------
-    angle : `Angle`
-        The angle of rotation for this matrix.
-
-    axis : array (length 3)
-        The (normalized) axis of rotation for this matrix.
-    """
-    m = np.asmatrix(matrix)
-    if m.shape != (3, 3):
-        raise ValueError('matrix is not 3x3')
-
-    axis = np.array((m[2, 1] - m[1, 2], m[0, 2] - m[2, 0], m[1, 0] - m[0, 1]))
-    r = np.sqrt((axis * axis).sum())
-    angle = np.arctan2(r, np.trace(m) - 1)
-
-    return Angle(angle, u.radian), -axis / r
+    def __array_ufunc__(self, *args, **kwargs):
+        results = super().__array_ufunc__(*args, **kwargs)
+        return _no_angle_subclass(results)

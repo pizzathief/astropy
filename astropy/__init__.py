@@ -6,18 +6,67 @@ Python. It also provides an index for other astronomy packages and tools for
 managing them.
 """
 
-from __future__ import absolute_import
+
+import sys
+import os
+from warnings import warn
+
+__minimum_numpy_version__ = '1.10.0'
+
+
+class UnsupportedPythonError(Exception):
+    pass
+
+
+# This is the same check as the one at the top of setup.py
+__minimum_python_version__ = '3.5'
+if sys.version_info < tuple((int(val) for val in __minimum_python_version__.split('.'))):
+    raise UnsupportedPythonError("Astropy does not support Python < {}".format(__minimum_python_version__))
+
+
+def _is_astropy_source(path=None):
+    """
+    Returns whether the source for this module is directly in an astropy
+    source distribution or checkout.
+    """
+
+    # If this __init__.py file is in ./astropy/ then import is within a source
+    # dir .astropy-root is a file distributed with the source, but that should
+    # not installed
+    if path is None:
+        path = os.path.join(os.path.dirname(__file__), os.pardir)
+    elif os.path.isfile(path):
+        path = os.path.dirname(path)
+
+    source_dir = os.path.abspath(path)
+    return os.path.exists(os.path.join(source_dir, '.astropy-root'))
+
+
+def _is_astropy_setup():
+    """
+    Returns whether we are currently being imported in the context of running
+    Astropy's setup.py.
+    """
+
+    main_mod = sys.modules.get('__main__')
+    if not main_mod:
+        return False
+
+    return (getattr(main_mod, '__file__', False) and
+            os.path.basename(main_mod.__file__).rstrip('co') == 'setup.py' and
+            _is_astropy_source(main_mod.__file__))
+
 
 # this indicates whether or not we are in astropy's setup.py
 try:
     _ASTROPY_SETUP_
 except NameError:
     from sys import version_info
-    if version_info[0] >= 3:
-        import builtins
-    else:
-        import __builtin__ as builtins
-    builtins._ASTROPY_SETUP_ = False
+    import builtins
+
+    # This will set the _ASTROPY_SETUP_ to True by default if
+    # we are running Astropy's setup.py
+    builtins._ASTROPY_SETUP_ = _is_astropy_setup()
 
 
 try:
@@ -30,9 +79,6 @@ try:
 except ImportError:
     # TODO: Issue a warning using the logging framework
     __githash__ = ''
-
-
-__minimum_numpy_version__ = '1.6.0'
 
 
 # The location of the online documentation for astropy
@@ -73,7 +119,6 @@ if not _ASTROPY_SETUP_:
 
 
 from . import config as _config
-import sys
 
 
 class Conf(_config.ConfigNamespace):
@@ -105,12 +150,8 @@ class Conf(_config.ConfigNamespace):
         cfgtype='integer(default=None)',
         aliases=['astropy.table.pprint.max_width'])
 
+
 conf = Conf()
-
-
-UNICODE_OUTPUT = _config.ConfigAlias(
-    '0.4', 'UNICODE_OUTPUT', 'unicode_output')
-
 
 # Create the test() function
 from .tests.runner import TestRunner
@@ -121,20 +162,6 @@ test = TestRunner.make_test_runner_in(__path__[0])
 # configuration file with the defaults
 def _initialize_astropy():
     from . import config
-
-    import os
-    import sys
-    from warnings import warn
-    from .utils.exceptions import AstropyDeprecationWarning
-
-    # If this __init__.py file is in ./astropy/ then import is within a source dir
-    source_dir = os.path.abspath(os.path.dirname(__file__))
-    is_astropy_source_dir = os.path.exists(os.path.join(source_dir, os.pardir,
-                                                        '.astropy-root'))
-
-    if sys.version_info[:2] < (2, 7):
-        warn("Python 2.6 will no longer be supported from Astropy v1.2.0 and "
-             "above", AstropyDeprecationWarning)
 
     def _rollback_import(message):
         log.error(message)
@@ -153,15 +180,15 @@ def _initialize_astropy():
     try:
         from .utils import _compiler
     except ImportError:
-        if is_astropy_source_dir:
-            log.warn('You appear to be trying to import astropy from '
-                     'within a source checkout without building the '
-                     'extension modules first.  Attempting to (re)build '
-                     'extension modules:')
+        if _is_astropy_source():
+            log.warning('You appear to be trying to import astropy from '
+                        'within a source checkout without building the '
+                        'extension modules first.  Attempting to (re)build '
+                        'extension modules:')
 
             try:
                 _rebuild_extensions()
-            except:
+            except BaseException as exc:
                 _rollback_import(
                     'An error occurred while attempting to rebuild the '
                     'extension modules.  Please try manually running '
@@ -169,6 +196,12 @@ def _initialize_astropy():
                     '--inplace` to see what the issue was.  Extension '
                     'modules must be successfully compiled and importable '
                     'in order to import astropy.')
+                # Reraise the Exception only in case it wasn't an Exception,
+                # for example if a "SystemExit" or "KeyboardInterrupt" was
+                # invoked.
+                if not isinstance(exc, Exception):
+                    raise
+
         else:
             # Outright broken installation; don't be nice.
             raise
@@ -188,13 +221,10 @@ def _rebuild_extensions():
     global __version__
     global __githash__
 
-    import os
     import subprocess
-    import sys
     import time
 
     from .utils.console import Spinner
-    from .extern.six import next
 
     devnull = open(os.devnull, 'w')
     old_cwd = os.getcwd()
@@ -209,6 +239,7 @@ def _rebuild_extensions():
                 time.sleep(0.05)
     finally:
         os.chdir(old_cwd)
+        devnull.close()
 
     if sp.returncode != 0:
         raise OSError('Running setup.py build_ext --inplace failed '
@@ -231,15 +262,16 @@ def _rebuild_extensions():
 
 # Set the bibtex entry to the article referenced in CITATION
 def _get_bibtex():
-    import os
     import re
     if os.path.exists('CITATION'):
         with open('CITATION', 'r') as citation:
-            refcontents = re.findall(r'\{[^()]*\}', citation.read())[0]
-            bibtexreference = "@ARTICLE{0}".format(refcontents)
+            refs = re.findall(r'\{[^()]*\}', citation.read())
+            if len(refs) == 0: return ''
+            bibtexreference = "@ARTICLE{0}".format(refs[0])
         return bibtexreference
     else:
         return ''
+
 
 __bibtex__ = _get_bibtex()
 
@@ -271,7 +303,7 @@ def online_help(query):
     query : str
         The search query.
     """
-    from .extern.six.moves.urllib.parse import urlencode
+    from urllib.parse import urlencode
     import webbrowser
 
     version = __version__
@@ -288,7 +320,7 @@ def online_help(query):
 
 __dir__ = ['__version__', '__githash__', '__minimum_numpy_version__',
            '__bibtex__', 'test', 'log', 'find_api_page', 'online_help',
-           'online_docs_root', 'conf', 'UNICODE_OUTPUT']
+           'online_docs_root', 'conf']
 
 
 from types import ModuleType as __module_type__

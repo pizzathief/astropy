@@ -8,17 +8,15 @@ cds.py:
 :Author: Tom Aldcroft (aldcroft@head.cfa.harvard.edu)
 """
 
-from __future__ import absolute_import, division, print_function
 
 import fnmatch
 import itertools
 import re
 import os
+from contextlib import suppress
 
 from . import core
 from . import fixedwidth
-
-from ...utils.compat import ignored
 
 
 __doctest_skip__ = ['*']
@@ -36,10 +34,9 @@ class CdsHeader(core.BaseHeader):
     def get_type_map_key(self, col):
         match = re.match(r'\d*(\S)', col.raw_type.lower())
         if not match:
-            raise ValueError('Unrecognized CDS format "%s" for column "%s"' % (
+            raise ValueError('Unrecognized CDS format "{}" for column "{}"'.format(
                 col.raw_type, col.name))
         return match.group(1)
-
 
     def get_cols(self, lines):
         """
@@ -66,7 +63,7 @@ class CdsHeader(core.BaseHeader):
                 line = line.strip()
                 if in_header:
                     lines.append(line)
-                    if line.startswith('------') or line.startswith('======='):
+                    if line.startswith(('------', '=======')):
                         comment_lines += 1
                         if comment_lines == 3:
                             break
@@ -94,8 +91,8 @@ class CdsHeader(core.BaseHeader):
         for i_col_def, line in enumerate(lines):
             if re.match(r'Byte-by-byte Description', line, re.IGNORECASE):
                 found_line = True
-            elif found_line: # First line after list of file descriptions
-                i_col_def -= 1 # Set i_col_def to last description line
+            elif found_line:  # First line after list of file descriptions
+                i_col_def -= 1  # Set i_col_def to last description line
                 break
 
         re_col_def = re.compile(r"""\s*
@@ -103,13 +100,13 @@ class CdsHeader(core.BaseHeader):
                                     (?P<end>   \d+)        \s+
                                     (?P<format> [\w.]+)     \s+
                                     (?P<units> \S+)        \s+
-                                    (?P<name>  \S+)        \s+
-                                    (?P<descr> \S.+)""",
+                                    (?P<name>  \S+)
+                                    (\s+ (?P<descr> \S.*))?""",
                                 re.VERBOSE)
 
         cols = []
         for line in itertools.islice(lines, i_col_def+4, None):
-            if line.startswith('------') or line.startswith('======='):
+            if line.startswith(('------', '=======')):
                 break
             match = re_col_def.match(line)
             if match:
@@ -120,13 +117,14 @@ class CdsHeader(core.BaseHeader):
                 col.unit = match.group('units')
                 if col.unit == '---':
                     col.unit = None  # "---" is the marker for no unit in CDS table
-                col.description = match.group('descr').strip()
+                col.description = (match.group('descr') or '').strip()
                 col.raw_type = match.group('format')
                 col.type = self.get_col_type(col)
 
                 match = re.match(
-                    r'\? (?P<equal> =)? (?P<nullval> \S*)', col.description, re.VERBOSE)
+                    r'\? (?P<equal> =)? (?P<nullval> \S*) (\s+ (?P<descriptiontext> \S.*))?', col.description, re.VERBOSE)
                 if match:
+                    col.description = (match.group('descriptiontext') or '').strip()
                     if issubclass(col.type, core.FloatType):
                         fillval = 'nan'
                     else:
@@ -147,7 +145,7 @@ class CdsHeader(core.BaseHeader):
                 if cols:
                     cols[-1].description += line.strip()
                 else:
-                    raise ValueError('Line "%s" not parsable as CDS header' % line)
+                    raise ValueError('Line "{}" not parsable as CDS header'.format(line))
 
         self.names = [x.name for x in cols]
 
@@ -167,8 +165,8 @@ class CdsData(core.BaseData):
         # attribute.
         if self.header.readme and self.table_name:
             return lines
-        i_sections = [i for (i, x) in enumerate(lines)
-                      if x.startswith('------') or x.startswith('=======')]
+        i_sections = [i for i, x in enumerate(lines)
+                      if x.startswith(('------', '======='))]
         if not i_sections:
             raise core.InconsistentTableError('No CDS section delimiter found')
         return lines[i_sections[-1]+1:]
@@ -285,7 +283,7 @@ class Cds(core.BaseReader):
     header_class = CdsHeader
 
     def __init__(self, readme=None):
-        super(Cds, self).__init__()
+        super().__init__()
         self.header.readme = readme
 
     def write(self, table=None):
@@ -298,7 +296,7 @@ class Cds(core.BaseReader):
         if self.data.start_line == 'guess':
             # Replicate the first part of BaseReader.read up to the point where
             # the table lines are initially read in.
-            with ignored(TypeError):
+            with suppress(TypeError):
                 # For strings only
                 if os.linesep not in table + '':
                     self.data.table_name = os.path.basename(table)
@@ -314,8 +312,8 @@ class Cds(core.BaseReader):
             # could be a file.
             for data_start in range(len(lines)):
                 self.data.start_line = data_start
-                with ignored(Exception):
-                    table = super(Cds, self).read(lines)
+                with suppress(Exception):
+                    table = super().read(lines)
                     return table
         else:
-            return super(Cds, self).read(table)
+            return super().read(table)

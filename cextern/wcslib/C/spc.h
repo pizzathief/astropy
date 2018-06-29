@@ -1,7 +1,7 @@
 /*============================================================================
 
-  WCSLIB 5.9 - an implementation of the FITS WCS standard.
-  Copyright (C) 1995-2015, Mark Calabretta
+  WCSLIB 5.18 - an implementation of the FITS WCS standard.
+  Copyright (C) 1995-2018, Mark Calabretta
 
   This file is part of WCSLIB.
 
@@ -22,10 +22,10 @@
 
   Author: Mark Calabretta, Australia Telescope National Facility, CSIRO.
   http://www.atnf.csiro.au/people/Mark.Calabretta
-  $Id: spc.h,v 5.9 2015/07/21 09:20:01 mcalabre Exp $
+  $Id: spc.h,v 5.18 2018/01/10 08:32:14 mcalabre Exp $
 *=============================================================================
 *
-* WCSLIB 5.9 - C routines that implement the FITS World Coordinate System
+* WCSLIB 5.18 - C routines that implement the FITS World Coordinate System
 * (WCS) standard.  Refer to the README file provided with WCSLIB for an
 * overview of the library.
 *
@@ -647,6 +647,9 @@
 =                         velref = 1
 *
 *                       returns ctype = 'VOPT' with specsys set to 'LSRK'.
+*
+*                       If omitted from the header, the default value of
+*                       VELREF is 0.
 *
 * Returned:
 *   ctype     char[9]   Translated CTYPEia keyvalue, or a copy of ctypeA if no

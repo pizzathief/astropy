@@ -1,31 +1,27 @@
 # Licensed under a 3-clause BSD style license - see PYFITS.rst
-from __future__ import division, with_statement
 
 import gzip
 import bz2
 import io
 import mmap
 import os
-import shutil
+import pathlib
 import warnings
 import zipfile
 
+import pytest
 import numpy as np
 
-try:
-    import StringIO
-    HAVE_STRINGIO = True
-except ImportError:
-    HAVE_STRINGIO = False
-
-from ....io import fits
-from ....tests.helper import pytest, raises, catch_warnings
-from ....utils.exceptions import AstropyDeprecationWarning
 from . import FitsTestCase
-from .util import ignore_warnings
+
 from ..convenience import _getext
 from ..diff import FITSDiff
 from ..file import _File, GZIP_MAGIC
+
+from ....io import fits
+from ....tests.helper import raises, catch_warnings, ignore_warnings
+from ....utils.data import conf, get_pkg_data_filename
+from ....utils import data
 
 
 class TestCore(FitsTestCase):
@@ -33,9 +29,13 @@ class TestCore(FitsTestCase):
         with fits.open(self.data('ascii.fits')) as f:
             pass
 
-    @raises(IOError)
+    @raises(OSError)
     def test_missing_file(self):
         fits.open(self.temp('does-not-exist.fits'))
+
+    def test_filename_is_bytes_object(self):
+        with pytest.raises(TypeError):
+            fits.open(self.data('ascii.fits').encode())
 
     def test_naxisj_check(self):
         hdulist = fits.open(self.data('o4sp040b0_raw.fits'))
@@ -62,10 +62,24 @@ class TestCore(FitsTestCase):
         l.append(p)
         l.append(t)
 
-        l.writeto(self.temp('test.fits'), clobber=True)
+        l.writeto(self.temp('test.fits'), overwrite=True)
 
         with fits.open(self.temp('test.fits')) as p:
             assert p[1].data[1]['foo'] == 60000.0
+
+    def test_fits_file_path_object(self):
+        """
+        Testing when fits file is passed as pathlib.Path object #4412.
+        """
+        fpath = pathlib.Path(get_pkg_data_filename('data/tdim.fits'))
+        hdulist = fits.open(fpath)
+
+        assert hdulist[0].filebytes() == 2880
+        assert hdulist[1].filebytes() == 5760
+
+        hdulist2 = fits.open(self.data('tdim.fits'))
+
+        assert FITSDiff(hdulist2, hdulist).identical is True
 
     def test_add_del_columns(self):
         p = fits.ColDefs([])
@@ -92,7 +106,7 @@ class TestCore(FitsTestCase):
         assert table.data.dtype.names == ('c2', 'c4', 'foo')
         assert table.columns.names == ['c2', 'c4', 'foo']
 
-        hdulist.writeto(self.temp('test.fits'), clobber=True)
+        hdulist.writeto(self.temp('test.fits'), overwrite=True)
         with ignore_warnings():
             # TODO: The warning raised by this test is actually indication of a
             # bug and should *not* be ignored. But as it is a known issue we
@@ -103,7 +117,6 @@ class TestCore(FitsTestCase):
                 assert table.data.dtype.names == ('c2', 'c4', 'foo')
                 assert table.columns.names == ['c2', 'c4', 'foo']
 
-    @ignore_warnings(AstropyDeprecationWarning)
     def test_update_header_card(self):
         """A very basic test for the Header.update method--I'd like to add a
         few more cases to this at some point.
@@ -114,23 +127,12 @@ class TestCore(FitsTestCase):
         header['BITPIX'] = (16, comment)
         assert 'BITPIX' in header
         assert header['BITPIX'] == 16
-        assert header.ascard['BITPIX'].comment == comment
+        assert header.comments['BITPIX'] == comment
 
-        # The new API doesn't support savecomment so leave this line here; at
-        # any rate good to have testing of the new API mixed with the old API
-        header.update('BITPIX', 32, savecomment=True)
-        # Make sure the value has been updated, but the comment was preserved
+        header.update(BITPIX=32)
         assert header['BITPIX'] == 32
-        assert header.ascard['BITPIX'].comment == comment
+        assert header.comments['BITPIX'] == ''
 
-        # The comment should still be preserved--savecomment only takes effect
-        # if a new comment is also specified
-        header['BITPIX'] = 16
-        assert header.ascard['BITPIX'].comment == comment
-        header.update('BITPIX', 16, 'foobarbaz', savecomment=True)
-        assert header.ascard['BITPIX'].comment == comment
-
-    @ignore_warnings(AstropyDeprecationWarning)
     def test_set_card_value(self):
         """Similar to test_update_header_card(), but tests the the
         `header['FOO'] = 'bar'` method of updating card values.
@@ -138,16 +140,16 @@ class TestCore(FitsTestCase):
 
         header = fits.Header()
         comment = 'number of bits per data pixel'
-        card = fits.Card.fromstring('BITPIX  = 32 / %s' % comment)
-        header.ascard.append(card)
+        card = fits.Card.fromstring('BITPIX  = 32 / {}'.format(comment))
+        header.append(card)
 
         header['BITPIX'] = 32
 
         assert 'BITPIX' in header
         assert header['BITPIX'] == 32
-        assert header.ascard['BITPIX'].key == 'BITPIX'
-        assert header.ascard['BITPIX'].value == 32
-        assert header.ascard['BITPIX'].comment == comment
+        assert header.cards[0].keyword == 'BITPIX'
+        assert header.cards[0].value == 32
+        assert header.cards[0].comment == comment
 
     def test_uint(self):
         hdulist_f = fits.open(self.data('o4sp040b0_raw.fits'), uint=False)
@@ -157,14 +159,13 @@ class TestCore(FitsTestCase):
         assert hdulist_i[1].data.dtype == np.uint16
         assert np.all(hdulist_f[1].data == hdulist_i[1].data)
 
-    @ignore_warnings(AstropyDeprecationWarning)
     def test_fix_missing_card_append(self):
         hdu = fits.ImageHDU()
         errs = hdu.req_cards('TESTKW', None, None, 'foo', 'silentfix', [])
         assert len(errs) == 1
         assert 'TESTKW' in hdu.header
         assert hdu.header['TESTKW'] == 'foo'
-        assert hdu.header.ascard[-1].key == 'TESTKW'
+        assert hdu.header.cards[-1].keyword == 'TESTKW'
 
     def test_fix_invalid_keyword_value(self):
         hdu = fits.ImageHDU()
@@ -189,7 +190,7 @@ class TestCore(FitsTestCase):
     def test_unfixable_missing_card(self):
         class TestHDU(fits.hdu.base.NonstandardExtHDU):
             def _verify(self, option='warn'):
-                errs = super(TestHDU, self)._verify(option)
+                errs = super()._verify(option)
                 hdu.req_cards('TESTKW', None, None, None, 'fix', errs)
                 return errs
 
@@ -218,9 +219,9 @@ class TestCore(FitsTestCase):
             del hdu.header['NAXIS']
             try:
                 hdu.verify('ignore')
-            except Exception as e:
+            except Exception as exc:
                 self.fail('An exception occurred when the verification error '
-                          'should have been ignored: %s' % exc)
+                          'should have been ignored: {}'.format(exc))
         # Make sure the error wasn't fixed either, silently or otherwise
         assert 'NAXIS' not in hdu.header
 
@@ -228,6 +229,16 @@ class TestCore(FitsTestCase):
     def test_unrecognized_verify_option(self):
         hdu = fits.ImageHDU()
         hdu.verify('foobarbaz')
+
+    def test_errlist_basic(self):
+        # Just some tests to make sure that _ErrList is setup correctly.
+        # No arguments
+        error_list = fits.verify._ErrList()
+        assert error_list == []
+        # Some contents - this is not actually working, it just makes sure they
+        # are kept.
+        error_list = fits.verify._ErrList([1, 2, 3])
+        assert error_list == [1, 2, 3]
 
     def test_combined_verify_options(self):
         """
@@ -252,7 +263,7 @@ class TestCore(FitsTestCase):
                 hdu.verify('silentfix+ignore')
             except Exception as exc:
                 self.fail('An exception occurred when the verification error '
-                          'should have been ignored: %s' % exc)
+                          'should have been ignored: {}'.format(exc))
 
         # silentfix+warn should be quiet about the fixed HDU and only warn
         # about the unfixable one
@@ -352,9 +363,6 @@ class TestCore(FitsTestCase):
         runtime works.
         """
 
-        if 'PYFITS_EXTENSION_NAME_CASE_SENSITIVE' in os.environ:
-            del os.environ['PYFITS_EXTENSION_NAME_CASE_SENSITIVE']
-
         hdu = fits.ImageHDU()
         hdu.name = 'sCi'
         assert hdu.name == 'SCI'
@@ -416,7 +424,7 @@ class TestCore(FitsTestCase):
         hdu.header['SIMPLE'] = False
         hdu.writeto(self.temp('test.fits'))
 
-        info = [(0, '', 'NonstandardHDU', 5, (), '', '')]
+        info = [(0, '', 1, 'NonstandardHDU', 5, (), '', '')]
         with fits.open(self.temp('test.fits')) as hdul:
             assert hdul.info(output=False) == info
             # NonstandardHDUs just treat the data as an unspecified array of
@@ -503,7 +511,7 @@ class TestCore(FitsTestCase):
             # Add a bunch of header keywords so that the data will be forced to
             # new offsets within the file:
             for idx in range(40):
-                hdul1[1].header['TEST%d' % idx] = 'test'
+                hdul1[1].header['TEST{}'.format(idx)] = 'test'
 
             hdul1.writeto(self.temp('test1.fits'))
             hdul1.writeto(self.temp('test2.fits'))
@@ -514,14 +522,14 @@ class TestCore(FitsTestCase):
             with fits.open(self.data('test0.fits')) as hdul2:
                 with fits.open(self.temp('test2.fits')) as hdul3:
                     for hdul in (hdul1, hdul3):
-                        for idx, hdus in enumerate(zip(hdul1, hdul)):
-                            hdu1, hdu2 = hdus
+                        for idx, hdus in enumerate(zip(hdul2, hdul)):
+                            hdu2, hdu = hdus
                             if idx != 1:
-                                assert hdu1.header == hdu2.header
+                                assert hdu.header == hdu2.header
                             else:
-                                assert (hdu1.header ==
-                                        hdu2.header[:len(hdu1.header)])
-                            assert np.all(hdu1.data == hdu2.data)
+                                assert (hdu2.header ==
+                                        hdu.header[:len(hdu2.header)])
+                            assert np.all(hdu.data == hdu2.data)
 
 
 class TestConvenienceFunctions(FitsTestCase):
@@ -534,12 +542,11 @@ class TestConvenienceFunctions(FitsTestCase):
         data = np.zeros((100, 100))
         header = fits.Header()
         fits.writeto(self.temp('array.fits'), data, header=header,
-                     clobber=True)
+                     overwrite=True)
         hdul = fits.open(self.temp('array.fits'))
         assert len(hdul) == 1
         assert (data == hdul[0].data).all()
 
-    @ignore_warnings(AstropyDeprecationWarning)
     def test_writeto_2(self):
         """
         Regression test for https://aeon.stsci.edu/ssb/trac/pyfits/ticket/107
@@ -547,11 +554,11 @@ class TestConvenienceFunctions(FitsTestCase):
         Test of `writeto()` with a trivial header containing a single keyword.
         """
 
-        data = np.zeros((100,100))
+        data = np.zeros((100, 100))
         header = fits.Header()
         header.set('CRPIX1', 1.)
         fits.writeto(self.temp('array.fits'), data, header=header,
-                     clobber=True, output_verify='silentfix')
+                     overwrite=True, output_verify='silentfix')
         hdul = fits.open(self.temp('array.fits'))
         assert len(hdul) == 1
         assert (data == hdul[0].data).all()
@@ -567,15 +574,13 @@ class TestFileFunctions(FitsTestCase):
 
     def test_open_nonexistent(self):
         """Test that trying to open a non-existent file results in an
-        IOError (and not some other arbitrary exception).
+        OSError (and not some other arbitrary exception).
         """
 
         try:
             fits.open(self.temp('foobar.fits'))
-        except IOError as e:
+        except OSError as e:
             assert 'No such file or directory' in str(e)
-        except:
-            raise
 
         # But opening in ostream or append mode should be okay, since they
         # allow writing new files
@@ -586,15 +591,117 @@ class TestFileFunctions(FitsTestCase):
             assert os.path.exists(self.temp('foobar.fits'))
             os.remove(self.temp('foobar.fits'))
 
+    def test_open_file_handle(self):
+        # Make sure we can open a FITS file from an open file handle
+        with open(self.data('test0.fits'), 'rb') as handle:
+            with fits.open(handle) as fitsfile:
+                pass
+
+        with open(self.temp('temp.fits'), 'wb') as handle:
+            with fits.open(handle, mode='ostream') as fitsfile:
+                pass
+
+        # Opening without explicitly specifying binary mode should fail
+        with pytest.raises(ValueError):
+            with open(self.data('test0.fits')) as handle:
+                with fits.open(handle) as fitsfile:
+                    pass
+
+        # All of these read modes should fail
+        for mode in ['r', 'rt']:
+            with pytest.raises(ValueError):
+                with open(self.data('test0.fits'), mode=mode) as handle:
+                    with fits.open(handle) as fitsfile:
+                        pass
+
+        # These update or write modes should fail as well
+        for mode in ['w', 'wt', 'w+', 'wt+', 'r+', 'rt+',
+                     'a', 'at', 'a+', 'at+']:
+            with pytest.raises(ValueError):
+                with open(self.temp('temp.fits'), mode=mode) as handle:
+                    with fits.open(handle) as fitsfile:
+                        pass
+
+    def test_fits_file_handle_mode_combo(self):
+        # This should work fine since no mode is given
+        with open(self.data('test0.fits'), 'rb') as handle:
+            with fits.open(handle) as fitsfile:
+                pass
+
+        # This should work fine since the modes are compatible
+        with open(self.data('test0.fits'), 'rb') as handle:
+            with fits.open(handle, mode='readonly') as fitsfile:
+                pass
+
+        # This should not work since the modes conflict
+        with pytest.raises(ValueError):
+            with open(self.data('test0.fits'), 'rb') as handle:
+                with fits.open(handle, mode='ostream') as fitsfile:
+                    pass
+
+    def test_open_from_url(self):
+        import urllib.request
+        file_url = "file:///" + self.data('test0.fits')
+        with urllib.request.urlopen(file_url) as urlobj:
+            with fits.open(urlobj) as fits_handle:
+                pass
+
+        # It will not be possible to write to a file that is from a URL object
+        for mode in ('ostream', 'append', 'update'):
+            with pytest.raises(ValueError):
+                with urllib.request.urlopen(file_url) as urlobj:
+                    with fits.open(urlobj, mode=mode) as fits_handle:
+                        pass
+
+    @pytest.mark.remote_data(source='astropy')
+    def test_open_from_remote_url(self):
+
+        import urllib.request
+
+        for dataurl in (conf.dataurl, conf.dataurl_mirror):
+
+            remote_url = '{}/{}'.format(dataurl, 'allsky/allsky_rosat.fits')
+
+            try:
+
+                with urllib.request.urlopen(remote_url) as urlobj:
+                    with fits.open(urlobj) as fits_handle:
+                        assert len(fits_handle) == 1
+
+                for mode in ('ostream', 'append', 'update'):
+                    with pytest.raises(ValueError):
+                        with urllib.request.urlopen(remote_url) as urlobj:
+                            with fits.open(urlobj, mode=mode) as fits_handle:
+                                assert len(fits_handle) == 1
+
+            except (urllib.error.HTTPError, urllib.error.URLError):
+                continue
+            else:
+                break
+        else:
+            raise Exception("Could not download file")
+
     def test_open_gzipped(self):
+        gzip_file = self._make_gzip_file()
         with ignore_warnings():
-            assert len(fits.open(self._make_gzip_file())) == 5
+            with fits.open(gzip_file) as fits_handle:
+                assert fits_handle._file.compression == 'gzip'
+                assert len(fits_handle) == 5
+            with fits.open(gzip.GzipFile(gzip_file)) as fits_handle:
+                assert fits_handle._file.compression == 'gzip'
+                assert len(fits_handle) == 5
+
+    def test_open_gzipped_from_handle(self):
+        with open(self._make_gzip_file(), 'rb') as handle:
+            with fits.open(handle) as fits_handle:
+                assert fits_handle._file.compression == 'gzip'
 
     def test_detect_gzipped(self):
         """Test detection of a gzip file when the extension is not .gz."""
-
         with ignore_warnings():
-            assert len(fits.open(self._make_gzip_file('test0.fz'))) == 5
+            with fits.open(self._make_gzip_file('test0.fz')) as fits_handle:
+                assert fits_handle._file.compression == 'gzip'
+                assert len(fits_handle) == 5
 
     def test_writeto_append_mode_gzip(self):
         """Regression test for
@@ -608,7 +715,7 @@ class TestFileFunctions(FitsTestCase):
         # still how the original test case looked
         # Note: with statement not supported on GzipFile in older Python
         # versions
-        fileobj =  gzip.GzipFile(self.temp('test.fits.gz'), 'ab+')
+        fileobj = gzip.GzipFile(self.temp('test.fits.gz'), 'ab+')
         h = fits.PrimaryHDU()
         try:
             h.writeto(fileobj)
@@ -618,15 +725,48 @@ class TestFileFunctions(FitsTestCase):
         with fits.open(self.temp('test.fits.gz')) as hdul:
             assert hdul[0].header == h.header
 
+    def test_fits_update_mode_gzip(self):
+        """Test updating a GZipped FITS file"""
+
+        with fits.open(self._make_gzip_file('update.gz'), mode='update') as fits_handle:
+            hdu = fits.ImageHDU(data=[x for x in range(100)])
+            fits_handle.append(hdu)
+
+        with fits.open(self.temp('update.gz')) as new_handle:
+            assert len(new_handle) == 6
+            assert (new_handle[-1].data == [x for x in range(100)]).all()
+
+    def test_fits_append_mode_gzip(self):
+        """Make sure that attempting to open an existing GZipped FITS file in
+        'append' mode raises an error"""
+
+        with pytest.raises(OSError):
+            with fits.open(self._make_gzip_file('append.gz'), mode='append') as fits_handle:
+                pass
+
     def test_open_bzipped(self):
+        bzip_file = self._make_bzip2_file()
         with ignore_warnings():
-            assert len(fits.open(self._make_bzip2_file())) == 5
+            with fits.open(bzip_file) as fits_handle:
+                assert fits_handle._file.compression == 'bzip2'
+                assert len(fits_handle) == 5
+
+            with fits.open(bz2.BZ2File(bzip_file)) as fits_handle:
+                assert fits_handle._file.compression == 'bzip2'
+                assert len(fits_handle) == 5
+
+    def test_open_bzipped_from_handle(self):
+        with open(self._make_bzip2_file(), 'rb') as handle:
+            with fits.open(handle) as fits_handle:
+                assert fits_handle._file.compression == 'bzip2'
+                assert len(fits_handle) == 5
 
     def test_detect_bzipped(self):
         """Test detection of a bzip2 file when the extension is not .bz2."""
-
         with ignore_warnings():
-            assert len(fits.open(self._make_bzip2_file('test0.xx'))) == 5
+            with fits.open(self._make_bzip2_file('test0.xx')) as fits_handle:
+                assert fits_handle._file.compression == 'bzip2'
+                assert len(fits_handle) == 5
 
     def test_writeto_bzip2_fileobj(self):
         """Test writing to a bz2.BZ2File file like object"""
@@ -650,13 +790,20 @@ class TestFileFunctions(FitsTestCase):
             assert hdul[0].header == h.header
 
     def test_open_zipped(self):
-        zf = self._make_zip_file()
-
+        zip_file = self._make_zip_file()
         with ignore_warnings():
-            assert len(fits.open(self._make_zip_file())) == 5
+            with fits.open(zip_file) as fits_handle:
+                assert fits_handle._file.compression == 'zip'
+                assert len(fits_handle) == 5
+            with fits.open(zipfile.ZipFile(zip_file)) as fits_handle:
+                assert fits_handle._file.compression == 'zip'
+                assert len(fits_handle) == 5
 
-        with ignore_warnings():
-            assert len(fits.open(zipfile.ZipFile(zf))) == 5
+    def test_open_zipped_from_handle(self):
+        with open(self._make_zip_file(), 'rb') as handle:
+            with fits.open(handle) as fits_handle:
+                assert fits_handle._file.compression == 'zip'
+                assert len(fits_handle) == 5
 
     def test_detect_zipped(self):
         """Test detection of a zip file when the extension is not .zip."""
@@ -669,12 +816,12 @@ class TestFileFunctions(FitsTestCase):
         """Opening zipped files in a writeable mode should fail."""
 
         zf = self._make_zip_file()
-        pytest.raises(IOError, fits.open, zf, 'update')
-        pytest.raises(IOError, fits.open, zf, 'append')
+        pytest.raises(OSError, fits.open, zf, 'update')
+        pytest.raises(OSError, fits.open, zf, 'append')
 
         zf = zipfile.ZipFile(zf, 'a')
-        pytest.raises(IOError, fits.open, zf, 'update')
-        pytest.raises(IOError, fits.open, zf, 'append')
+        pytest.raises(OSError, fits.open, zf, 'update')
+        pytest.raises(OSError, fits.open, zf, 'append')
 
     def test_read_open_astropy_gzip_file(self):
         """
@@ -683,16 +830,13 @@ class TestFileFunctions(FitsTestCase):
         This tests reading from a ``GzipFile`` object from Astropy's
         compatibility copy of the ``gzip`` module.
         """
-
-        from ....utils.compat import gzip
-
         gf = gzip.GzipFile(self._make_gzip_file())
         try:
             assert len(fits.open(gf)) == 5
         finally:
             gf.close()
 
-    @raises(IOError)
+    @raises(OSError)
     def test_open_multiple_member_zipfile(self):
         """
         Opening zip files containing more than one member files should fail
@@ -735,10 +879,12 @@ class TestFileFunctions(FitsTestCase):
         gf = self._make_gzip_file()
         with fits.open(gf, mode='update') as h:
             h[0].header['EXPFLAG'] = 'ABNORMAL'
+            h[1].data[0, 0] = 1
         with fits.open(gf) as h:
             # Just to make sur ethe update worked; if updates work
             # normal writes should work too...
             assert h[0].header['EXPFLAG'] == 'ABNORMAL'
+            assert h[1].data[0, 0] == 1
 
     def test_write_read_gzip_file(self):
         """
@@ -790,7 +936,7 @@ class TestFileFunctions(FitsTestCase):
         assert old_mode == os.stat(filename).st_mode
 
     def test_fileobj_mode_guessing(self):
-        """Tests whether a file opened without a specified pyfits mode
+        """Tests whether a file opened without a specified io.fits mode
         ('readonly', etc.) is opened in a mode appropriate for the given file
         object.
         """
@@ -844,7 +990,7 @@ class TestFileFunctions(FitsTestCase):
 
         class MockMmap(mmap.mmap):
             def flush(self):
-                raise mmap.error('flush is broken on this platform')
+                raise OSError('flush is broken on this platform')
 
         old_mmap = mmap.mmap
         mmap.mmap = MockMmap
@@ -927,7 +1073,7 @@ class TestFileFunctions(FitsTestCase):
         that don't have an obvious "open" or "closed" state.
         """
 
-        class MyFileLike(object):
+        class MyFileLike:
             def __init__(self, foobar):
                 self._foobar = foobar
 
@@ -940,7 +1086,6 @@ class TestFileFunctions(FitsTestCase):
             def tell(self):
                 return self._foobar.tell()
 
-
         with open(self.data('test0.fits'), 'rb') as f:
             fileobj = MyFileLike(f)
 
@@ -952,20 +1097,7 @@ class TestFileFunctions(FitsTestCase):
                         if hdu1.data is not None and hdu2.data is not None:
                             assert np.all(hdu1.data == hdu2.data)
 
-    @pytest.mark.skipif('not HAVE_STRINGIO')
-    def test_write_stringio(self):
-        """
-        Regression test for https://github.com/astropy/astropy/issues/2463
-
-        Only test against `StringIO.StringIO` on Python versions that have it.
-        Note: `io.StringIO` is not supported for this purpose as it does not
-        accept a bytes stream.
-        """
-
-        self._test_write_string_bytes_io(StringIO.StringIO())
-
-    @pytest.mark.skipif('not HAVE_STRINGIO')
-    def test_write_stringio_discontiguous(self):
+    def test_write_bytesio_discontiguous(self):
         """
         Regression test related to
         https://github.com/astropy/astropy/issues/2794#issuecomment-55441539
@@ -976,7 +1108,7 @@ class TestFileFunctions(FitsTestCase):
 
         data = np.arange(100)[::3]
         hdu = fits.PrimaryHDU(data=data)
-        fileobj = StringIO.StringIO()
+        fileobj = io.BytesIO()
         hdu.writeto(fileobj)
 
         fileobj.seek(0)
@@ -1009,6 +1141,63 @@ class TestFileFunctions(FitsTestCase):
 
         with fits.open(self.temp(filename)) as hdul:
             assert np.all(hdul[0].data == hdu.data)
+
+    def test_writeto_full_disk(self, monkeypatch):
+        """
+        Test that it gives a readable error when trying to write an hdulist
+        to a full disk.
+        """
+
+        def _writeto(self, array):
+            raise OSError("Fake error raised when writing file.")
+
+        def get_free_space_in_dir(path):
+            return 0
+
+        with pytest.raises(OSError) as exc:
+            monkeypatch.setattr(fits.hdu.base._BaseHDU, "_writeto", _writeto)
+            monkeypatch.setattr(data, "get_free_space_in_dir", get_free_space_in_dir)
+
+            n = np.arange(0, 1000, dtype='int64')
+            hdu = fits.PrimaryHDU(n)
+            hdulist = fits.HDUList(hdu)
+            filename = self.temp('test.fits')
+
+            with open(filename, mode='wb') as fileobj:
+                hdulist.writeto(fileobj)
+
+        assert ("Not enough space on disk: requested 8000, available 0. "
+                "Fake error raised when writing file.") == exc.value.args[0]
+
+    def test_flush_full_disk(self, monkeypatch):
+        """
+        Test that it gives a readable error when trying to update an hdulist
+        to a full disk.
+        """
+        filename = self.temp('test.fits')
+        hdul = [fits.PrimaryHDU(), fits.ImageHDU()]
+        hdul = fits.HDUList(hdul)
+        hdul[0].data = np.arange(0, 1000, dtype='int64')
+        hdul.writeto(filename)
+
+        def _writedata(self, fileobj):
+            raise OSError("Fake error raised when writing file.")
+
+        def get_free_space_in_dir(path):
+            return 0
+
+        monkeypatch.setattr(fits.hdu.base._BaseHDU, "_writedata", _writedata)
+        monkeypatch.setattr(data, "get_free_space_in_dir",
+                            get_free_space_in_dir)
+
+        with pytest.raises(OSError) as exc:
+            with fits.open(filename, mode='update') as hdul:
+                hdul[0].data = np.arange(0, 1000, dtype='int64')
+                hdul.insert(1, fits.ImageHDU())
+                hdul.flush()
+
+        assert ("Not enough space on disk: requested 8000, available 0. "
+                "Fake error raised when writing file.") == exc.value.args[0]
 
     def _test_write_string_bytes_io(self, fileobj):
         """

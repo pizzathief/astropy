@@ -1,45 +1,49 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
+import pytest
 import numpy as np
 from numpy import testing as npt
 
 from ... import units as u
 from ...time import Time
 from ..builtin_frames import ICRS, AltAz
+from ..builtin_frames.utils import get_jd12
 from .. import EarthLocation
 from .. import SkyCoord
-from ...tests.helper import pytest
+from ...tests.helper import catch_warnings
 from ... import _erfa as erfa
 from ...utils import iers
 from .utils import randomly_sample_sphere
 
 
 # These fixtures are used in test_iau_fullstack
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def fullstack_icrs():
     ra, dec, _ = randomly_sample_sphere(1000)
     return ICRS(ra=ra, dec=dec)
 
-@pytest.fixture(scope="module")
+
+@pytest.fixture(scope="function")
 def fullstack_fiducial_altaz(fullstack_icrs):
     altazframe = AltAz(location=EarthLocation(lat=0*u.deg, lon=0*u.deg, height=0*u.m),
                        obstime=Time('J2000'))
     return fullstack_icrs.transform_to(altazframe)
 
-@pytest.fixture(scope="module", params=['J2000.1', 'J2010'])
+
+@pytest.fixture(scope="function", params=['J2000.1', 'J2010'])
 def fullstack_times(request):
     return Time(request.param)
 
-@pytest.fixture(scope="module", params=[(0, 0, 0), (23, 0, 0), (-70, 0, 0), (0, 100, 0), (23, 0, 3000)])
+
+@pytest.fixture(scope="function", params=[(0, 0, 0), (23, 0, 0), (-70, 0, 0), (0, 100, 0), (23, 0, 3000)])
 def fullstack_locations(request):
     return EarthLocation(lat=request.param[0]*u.deg, lon=request.param[0]*u.deg,
                          height=request.param[0]*u.m)
 
-@pytest.fixture(scope="module", params=[(0*u.bar, 0*u.deg_C, 0, 1*u.micron),
+
+@pytest.fixture(scope="function", params=[(0*u.bar, 0*u.deg_C, 0, 1*u.micron),
                                         (1*u.bar, 0*u.deg_C, 0, 1*u.micron),
                                         (1*u.bar, 10*u.deg_C, 0, 1*u.micron),
                                         (1*u.bar, 0*u.deg_C, .5, 1*u.micron),
@@ -64,7 +68,7 @@ def _erfa_check(ira, idec, astrom):
     return dct
 
 
-def test_iau_fullstack(fullstack_icrs,  fullstack_fiducial_altaz,
+def test_iau_fullstack(fullstack_icrs, fullstack_fiducial_altaz,
                        fullstack_times, fullstack_locations,
                        fullstack_obsconditions):
     """
@@ -107,18 +111,19 @@ def test_iau_fullstack(fullstack_icrs,  fullstack_fiducial_altaz,
     assert np.all(addecs < tol), 'largest Dec change is {0} mas, > {1}'.format(np.max(addecs.arcsec*1000), tol)
 
     # check that we're consistent with the ERFA alt/az result
-    xp, yp = u.Quantity(iers.IERS.open().pm_xy(fullstack_times.jd1, fullstack_times.jd2)).to(u.radian).value
-    lon = fullstack_locations.geodetic[0].to(u.radian).value
-    lat = fullstack_locations.geodetic[1].to(u.radian).value
-    height = fullstack_locations.geodetic[2].to(u.m).value
-    astrom, eo = erfa.apco13(fullstack_times.jd1, fullstack_times.jd2,
+    xp, yp = u.Quantity(iers.IERS_Auto.open().pm_xy(fullstack_times)).to_value(u.radian)
+    lon = fullstack_locations.geodetic[0].to_value(u.radian)
+    lat = fullstack_locations.geodetic[1].to_value(u.radian)
+    height = fullstack_locations.geodetic[2].to_value(u.m)
+    jd1, jd2 = get_jd12(fullstack_times, 'utc')
+    astrom, eo = erfa.apco13(jd1, jd2,
                              fullstack_times.delta_ut1_utc,
                              lon, lat, height,
                              xp, yp,
-                             fullstack_obsconditions[0].to(u.hPa).value,
-                             fullstack_obsconditions[1].to(u.deg_C).value,
+                             fullstack_obsconditions[0].to_value(u.hPa),
+                             fullstack_obsconditions[1].to_value(u.deg_C),
                              fullstack_obsconditions[2],
-                             fullstack_obsconditions[3].to(u.micron).value)
+                             fullstack_obsconditions[3].to_value(u.micron))
     erfadct = _erfa_check(fullstack_icrs.ra.rad, fullstack_icrs.dec.rad, astrom)
     npt.assert_allclose(erfadct['alt'], aacoo.alt.radian, atol=1e-7)
     npt.assert_allclose(erfadct['az'], aacoo.az.radian, atol=1e-7)
@@ -136,7 +141,7 @@ def test_fiducial_roudtrip(fullstack_icrs, fullstack_fiducial_altaz):
     npt.assert_allclose(fullstack_icrs.dec.deg, icrs2.dec.deg)
 
 
-def test_future_altaz(recwarn):
+def test_future_altaz():
     """
     While this does test the full stack, it is mostly meant to check that a
     warning is raised when attempting to get to AltAz in the future (beyond
@@ -144,11 +149,32 @@ def test_future_altaz(recwarn):
     """
     from ...utils.exceptions import AstropyWarning
 
-    location = EarthLocation(lat=0*u.deg, lon=0*u.deg)
-    t = Time('J2030')
+    # this is an ugly hack to get the warning to show up even if it has already
+    # appeared
+    from ..builtin_frames import utils
+    if hasattr(utils, '__warningregistry__'):
+        utils.__warningregistry__.clear()
 
-    SkyCoord(1*u.deg, 2*u.deg).transform_to(AltAz(location=location, obstime=t))
-    w1 = recwarn.pop(AstropyWarning)
-    w2 = recwarn.pop(AstropyWarning)
-    assert "Tried to get polar motions for times after IERS data is valid." in str(w1.message)
-    assert "(some) times are outside of range covered by IERS table." in str(w2.message)
+    with catch_warnings() as found_warnings:
+
+        location = EarthLocation(lat=0*u.deg, lon=0*u.deg)
+        t = Time('J2161')
+
+        SkyCoord(1*u.deg, 2*u.deg).transform_to(AltAz(location=location, obstime=t))
+
+    # check that these message(s) appear among any other warnings.  If tests are run with
+    # --remote-data then the IERS table will be an instance of IERS_Auto which is
+    # assured of being "fresh".  In this case getting times outside the range of the
+    # table does not raise an exception.  Only if using IERS_B (which happens without
+    # --remote-data, i.e. for all CI testing) do we expect another warning.
+    messages_to_find = ["Tried to get polar motions for times after IERS data is valid."]
+    if isinstance(iers.IERS_Auto.iers_table, iers.IERS_B):
+        messages_to_find.append("(some) times are outside of range covered by IERS table.")
+
+    messages_found = [False for _ in messages_to_find]
+    for w in found_warnings:
+        if issubclass(w.category, AstropyWarning):
+            for i, message_to_find in enumerate(messages_to_find):
+                if message_to_find in str(w.message):
+                    messages_found[i] = True
+    assert all(messages_found)

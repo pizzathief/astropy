@@ -1,14 +1,14 @@
 # The purpose of these tests are to ensure that calling quantities using
 # array methods returns quantities with the right units, or raises exceptions.
 
+import pytest
 import numpy as np
 
 from ... import units as u
-from ...tests.helper import pytest
-from ...utils.compat import NUMPY_LT_1_7, NUMPY_LT_1_8, NUMPY_LT_1_9_1
+from ...utils.compat import NUMPY_LT_1_10_4
 
 
-class TestQuantityArrayCopy(object):
+class TestQuantityArrayCopy:
     """
     Test whether arrays are properly copied/used in place
     """
@@ -22,7 +22,7 @@ class TestQuantityArrayCopy(object):
         assert q_copy[0].value != v[0]
 
     def test_to_copies(self):
-        q = u.Quantity(np.arange(1.,100.), "km/s")
+        q = u.Quantity(np.arange(1., 100.), "km/s")
         q2 = q.to(u.m/u.s)
         assert np.all(q.value != q2.value)
         q3 = q.to(u.km/u.s)
@@ -49,7 +49,7 @@ class TestQuantityArrayCopy(object):
         assert q_sel[0] == q[10]
         # also check that getitem can do new axes
         q2 = q[:, np.newaxis]
-        q2[10,0] = -9*u.m/u.s
+        q2[10, 0] = -9*u.m/u.s
         assert np.all(q2.flatten() == q)
 
     def test_flat(self):
@@ -66,19 +66,20 @@ class TestQuantityArrayCopy(object):
         # check that flat works like a view of the real array
         q_flat[8] = -1. * u.km / u.s
         assert q_flat[8] == -1. * u.km / u.s
-        assert q[2,2] == -1. * u.km / u.s
+        assert q[2, 2] == -1. * u.km / u.s
         # while if one goes by an iterated item, a copy is made
         q_flat_list[8] = -2 * u.km / u.s
         assert q_flat_list[8] == -2. * u.km / u.s
         assert q_flat[8] == -1. * u.km / u.s
-        assert q[2,2] == -1. * u.km / u.s
+        assert q[2, 2] == -1. * u.km / u.s
 
 
-class TestQuantityReshapeFuncs(object):
+class TestQuantityReshapeFuncs:
     """Test different ndarray methods that alter the array shape
 
     tests: reshape, squeeze, ravel, flatten, transpose, swapaxes
     """
+
     def test_reshape(self):
         q = np.arange(6.) * u.m
         q_reshape = q.reshape(3, 2)
@@ -122,7 +123,7 @@ class TestQuantityReshapeFuncs(object):
         assert np.all(q_swapaxes.value == q.value.swapaxes(0, 2))
 
 
-class TestQuantityStatsFuncs(object):
+class TestQuantityStatsFuncs:
     """
     Test statistical functions
     """
@@ -142,16 +143,7 @@ class TestQuantityStatsFuncs(object):
         q1 = np.array([1., 2.]) * u.m
         assert np.std(q1) == 0.5 * u.m
 
-    # For 1.7 <= Numpy < 1.9.1, inplace causes the variance to be stored instead
-    # of the standard deviation; https://github.com/numpy/numpy/issues/5240
-    @pytest.mark.xfail("NUMPY_LT_1_9_1")
     def test_std_inplace(self):
-
-        # For Numpy < 1.7, the test segfaults.  Hence, the xfail decorator does
-        # not suffice: py.test will run the test anyway to see if it works.
-        if NUMPY_LT_1_7:
-            pytest.xfail()
-
         q1 = np.array([1., 2.]) * u.m
         qi = 1.5 * u.s
         np.std(q1, out=qi)
@@ -162,12 +154,6 @@ class TestQuantityStatsFuncs(object):
         assert np.var(q1) == 0.25 * u.m ** 2
 
     def test_var_inplace(self):
-
-        # For Numpy < 1.7, the test segfaults.  Hence, we cannot use the xfail
-        # decorator since py.test will run the test anyway to see if it works.
-        if NUMPY_LT_1_7:
-            pytest.xfail()
-
         q1 = np.array([1., 2.]) * u.m
         qi = 1.5 * u.s
         np.var(q1, out=qi)
@@ -231,7 +217,6 @@ class TestQuantityStatsFuncs(object):
         q1 = np.array([1., 2., 4., 5., 6.]) * u.m
         assert np.ptp(q1) == 5. * u.m
 
-    @pytest.mark.xfail
     def test_ptp_inplace(self):
         q1 = np.array([1., 2., 4., 5., 6.]) * u.m
         qi = 1.5 * u.s
@@ -298,7 +283,6 @@ class TestQuantityStatsFuncs(object):
         assert np.all(q2.nansum(0) == np.array([1., 5., 10.]) * u.s)
         assert np.all(np.nansum(q2, 0) == np.array([1., 5., 10.]) * u.s)
 
-    @pytest.mark.xfail("NUMPY_LT_1_8")
     def test_nansum_inplace(self):
 
         q1 = np.array([1., 2., np.nan]) * u.m
@@ -371,31 +355,32 @@ class TestQuantityStatsFuncs(object):
         assert q3.value == np.dot(q1.value, q2.value)
         assert q3.unit == u.m * u.s
 
-    @pytest.mark.xfail
+    @pytest.mark.xfail(NUMPY_LT_1_10_4,
+                       reason="Numpy 1.10.4 or later is required")
     def test_trace_func(self):
 
-        q = np.array([[1.,2.],[3.,4.]]) * u.m
+        q = np.array([[1., 2.], [3., 4.]]) * u.m
         assert np.trace(q) == 5. * u.m
 
     def test_trace_meth(self):
 
-        q1 = np.array([[1.,2.],[3.,4.]]) * u.m
+        q1 = np.array([[1., 2.], [3., 4.]]) * u.m
         assert q1.trace() == 5. * u.m
 
         cont = u.Quantity(4., u.s)
 
-        q2 = np.array([[3.,4.],[5.,6.]]) * u.m
+        q2 = np.array([[3., 4.], [5., 6.]]) * u.m
         q2.trace(out=cont)
         assert cont == 9. * u.m
 
     def test_clip_func(self):
 
         q = np.arange(10) * u.m
-        assert np.all(np.clip(q, 3 * u.m, 6 * u.m) == np.array([3., 3.,3.,3.,4.,5.,6.,6.,6.,6.]) * u.m)
+        assert np.all(np.clip(q, 3 * u.m, 6 * u.m) == np.array([3., 3., 3., 3., 4., 5., 6., 6., 6., 6.]) * u.m)
 
     def test_clip_meth(self):
 
-        expected = np.array([3.,3.,3.,3.,4.,5.,6.,6.,6.,6.]) * u.m
+        expected = np.array([3., 3., 3., 3., 4., 5., 6., 6., 6., 6.]) * u.m
 
         q1 = np.arange(10) * u.m
         q3 = q1.clip(3 * u.m, 6 * u.m)
@@ -408,7 +393,7 @@ class TestQuantityStatsFuncs(object):
         assert np.all(cont == expected)
 
 
-class TestArrayConversion(object):
+class TestArrayConversion:
     """
     Test array conversion methods
     """
@@ -504,7 +489,7 @@ class TestArrayConversion(object):
         """
 
         a = np.random.uniform(size=(10, 8))
-        x, y, z = a[:,1:4].T * u.km/u.s
+        x, y, z = a[:, 1:4].T * u.km/u.s
         total = np.sum(a[:, 1] * u.km / u.s - x)
 
         assert isinstance(total, u.Quantity)
@@ -551,13 +536,19 @@ class TestArrayConversion(object):
             q1.dumps()
 
 
-class TestRecArray(object):
+class TestRecArray:
     """Record arrays are not specifically supported, but we should not
     prevent their use unnecessarily"""
-    def test_creation(self):
-        ra = (np.array(np.arange(12.).reshape(4,3))
+
+    def setup(self):
+        self.ra = (np.array(np.arange(12.).reshape(4, 3))
               .view(dtype=('f8,f8,f8')).squeeze())
-        qra = u.Quantity(ra, u.m)
-        assert np.all(qra[:2].value == ra[:2])
+
+    def test_creation(self):
+        qra = u.Quantity(self.ra, u.m)
+        assert np.all(qra[:2].value == self.ra[:2])
+
+    def test_equality(self):
+        qra = u.Quantity(self.ra, u.m)
         qra[1] = qra[2]
         assert qra[1] == qra[2]

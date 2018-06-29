@@ -1,11 +1,10 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
+
+from collections import OrderedDict
 
 import numpy as np
 
-from ..utils.compat.odict import OrderedDict
 from ..utils.misc import isiterable
 
 __all__ = ['FlagCollection']

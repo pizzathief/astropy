@@ -1,19 +1,19 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 import functools
 
+import pytest
 import numpy as np
 
-from ...tests.helper import pytest
 from .. import Time
 from ...utils.iers import iers  # used in testing
 
-allclose_jd = functools.partial(np.allclose, rtol=1e-15, atol=0)
-allclose_sec = functools.partial(np.allclose, rtol=1e-15, atol=1e-9)
-# 1 nanosec atol
+allclose_jd = functools.partial(np.allclose, rtol=0, atol=1e-9)
+allclose_sec = functools.partial(np.allclose, rtol=1e-15, atol=1e-4)
+# 0.1 ms atol; IERS-B files change at that level.
 
 try:
     iers.IERS_A.open()  # check if IERS_A is available
-except IOError:
+except OSError:
     HAS_IERS_A = False
 else:
     HAS_IERS_A = True
@@ -22,6 +22,7 @@ else:
 class TestTimeUT1():
     """Test Time.ut1 using IERS tables"""
 
+    @pytest.mark.remote_data
     def test_utc_to_ut1(self):
         "Test conversion of UTC to UT1, making sure to include a leap second"""
         t = Time(['2012-06-30 12:00:00', '2012-06-30 23:59:59',
@@ -38,8 +39,8 @@ class TestTimeUT1():
         assert allclose_jd(t.jd, t_back.jd)
 
         tnow = Time.now()
-        with pytest.raises(IndexError):
-            tnow.ut1
+
+        tnow.ut1
 
     def test_ut1_to_utc(self):
         """Also test the reverse, around the leap second
@@ -73,6 +74,17 @@ class TestTimeUT1_IERSA():
     def test_ut1_iers_A(self):
         tnow = Time.now()
         iers_a = iers.IERS_A.open()
+        tnow.delta_ut1_utc, status = iers_a.ut1_utc(tnow, return_status=True)
+        assert status == iers.FROM_IERS_A_PREDICTION
+        tnow_ut1_jd = tnow.ut1.jd
+        assert tnow_ut1_jd != tnow.jd
+
+
+@pytest.mark.remote_data
+class TestTimeUT1_IERS_Auto():
+    def test_ut1_iers_auto(self):
+        tnow = Time.now()
+        iers_a = iers.IERS_Auto.open()
         tnow.delta_ut1_utc, status = iers_a.ut1_utc(tnow, return_status=True)
         assert status == iers.FROM_IERS_A_PREDICTION
         tnow_ut1_jd = tnow.ut1.jd

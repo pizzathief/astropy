@@ -1,9 +1,10 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-from __future__ import division
 import numpy as np
 cimport numpy as np
+from .utils import KernelSizeError
 
-DTYPE = np.float
+
+DTYPE = float
 ctypedef np.float_t DTYPE_t
 
 cdef extern from "numpy/npy_math.h" nogil:
@@ -11,13 +12,38 @@ cdef extern from "numpy/npy_math.h" nogil:
 
 cimport cython
 
+cdef _raise_if_kernel_larger_than_array(const np.npy_intp * array_shape, const np.npy_intp * kernel_shape, length):
+    """
+    Helper function to raise an exception due to the following:
+
+    For boundary=None only the center space is convolved. All array indices within a
+    distance kernel.shape//2 from the edge are completely ignored (zeroed).
+    E.g. (1D list) only the indices len(kernel)//2 : len(array)-len(kernel)//2
+    are convolved. It is therefore not possible to use this method to convolve an
+    array by a kernel that is larger* than the array - as ALL pixels would be ignored
+    leaving an array of only zeros.
+    * For even kernels the correctness condition is array_shape > kernel_shape.
+    For odd kernels it is:
+    array_shape >= kernel_shape OR array_shape > kernel_shape-1 OR array_shape > 2*(kernel_shape//2).
+    Since the latter is equal to the former two for even lengths, the latter condition is complete.
+    """
+
+    for i in range(length):
+        if not array_shape[i] > 2*(kernel_shape[i]//2):
+            raise KernelSizeError("for boundary=None all kernel axes must be smaller than array's. "
+                                  "Triggered by: if not numpy.all(array.shape > 2*(kernel.shape//2)). "
+                                  "Use boundary in ('fill', 'extend', 'wrap') instead.")
+
 
 @cython.boundscheck(False)  # turn off bounds-checking for entire function
 def convolve1d_boundary_none(np.ndarray[DTYPE_t, ndim=1] f,
-                             np.ndarray[DTYPE_t, ndim=1] g):
+                             np.ndarray[DTYPE_t, ndim=1] g,
+                             bint normalize_by_kernel):
 
     if g.shape[0] % 2 != 1:
         raise ValueError("Convolution kernel must have odd dimensions")
+
+    _raise_if_kernel_larger_than_array(f.shape, g.shape, 1)
 
     assert f.dtype == DTYPE and g.dtype == DTYPE
 
@@ -27,7 +53,6 @@ def convolve1d_boundary_none(np.ndarray[DTYPE_t, ndim=1] f,
 
     # The following need to be set to zeros rather than empty because the
     # boundary does not get reset.
-    cdef np.ndarray[DTYPE_t, ndim=1] fixed = np.zeros([nx], dtype=DTYPE)
     cdef np.ndarray[DTYPE_t, ndim=1] conv = np.zeros([nx], dtype=DTYPE)
 
     cdef unsigned int i, ii
@@ -38,52 +63,37 @@ def convolve1d_boundary_none(np.ndarray[DTYPE_t, ndim=1] f,
 
     # release the GIL
     with nogil:
-        # Need a first pass to replace NaN values with value convolved from
-        # neighboring values
-        for i in range(nx):
-            if npy_isnan(f[i]) and i >= wkx and i < nx - wkx:
-                top = 0.
-                bot = 0.
-                for ii in range(i - wkx, i + wkx + 1):
-                    val = f[ii]
-                    if not npy_isnan(val):
-                        ker = g[<unsigned int>(wkx + ii - i)]
-                        top += val * ker
-                        bot += ker
-                if bot != 0.:
-                    fixed[i] = top / bot
-                else:
-                    fixed[i] = f[i]
-            else:
-                fixed[i] = f[i]
 
         # Now run the proper convolution
         for i in range(wkx, nx - wkx):
-            if not npy_isnan(fixed[i]):
-                top = 0.
-                bot = 0.
-                for ii in range(i - wkx, i + wkx + 1):
-                    val = fixed[ii]
-                    ker = g[<unsigned int>(wkx + ii - i)]
-                    if not npy_isnan(val):
-                        top += val * ker
-                        bot += ker
-                if bot != 0:
-                    conv[i] = top / bot
+            top = 0.
+            bot = 0.
+            for ii in range(i - wkx, i + wkx + 1):
+                val = f[ii]
+                ker = g[<unsigned int>(nkx - 1 - (wkx + ii - i))]
+                if not npy_isnan(val):
+                    top += val * ker
+                    bot += ker
+            if normalize_by_kernel:
+                if bot == 0:
+                    conv[i] = f[i]
                 else:
-                    conv[i] = fixed[i]
+                    conv[i] = top / bot
             else:
-                conv[i] = fixed[i]
+                conv[i] = top
     # GIL acquired again here
     return conv
 
 
 @cython.boundscheck(False)  # turn off bounds-checking for entire function
 def convolve2d_boundary_none(np.ndarray[DTYPE_t, ndim=2] f,
-                             np.ndarray[DTYPE_t, ndim=2] g):
+                             np.ndarray[DTYPE_t, ndim=2] g,
+                             bint normalize_by_kernel):
 
     if g.shape[0] % 2 != 1 or g.shape[1] % 2 != 1:
         raise ValueError("Convolution kernel must have odd dimensions")
+
+    _raise_if_kernel_larger_than_array(f.shape, g.shape, 2)
 
     assert f.dtype == DTYPE and g.dtype == DTYPE
 
@@ -96,7 +106,6 @@ def convolve2d_boundary_none(np.ndarray[DTYPE_t, ndim=2] f,
 
     # The following need to be set to zeros rather than empty because the
     # boundary does not get reset.
-    cdef np.ndarray[DTYPE_t, ndim=2] fixed = np.zeros([nx, ny], dtype=DTYPE)
     cdef np.ndarray[DTYPE_t, ndim=2] conv = np.zeros([nx, ny], dtype=DTYPE)
 
     cdef unsigned int i, j, ii, jj
@@ -107,59 +116,40 @@ def convolve2d_boundary_none(np.ndarray[DTYPE_t, ndim=2] f,
 
     # release the GIL
     with nogil:
-        # Need a first pass to replace NaN values with value convolved from
-        # neighboring values
-        for i in range(nx):
-            for j in range(ny):
-                if npy_isnan(f[i, j]) and i >= wkx and i < nx - wkx \
-                and j >= wky and j < ny - wky:
-                    top = 0.
-                    bot = 0.
-                    for ii in range(i - wkx, i + wkx + 1):
-                        for jj in range(j - wky, j + wky + 1):
-                            val = f[ii, jj]
-                            if not npy_isnan(val):
-                                ker = g[<unsigned int>(wkx + ii - i),
-                                        <unsigned int>(wky + jj - j)]
-                                top += val * ker
-                                bot += ker
-                    if bot != 0.:
-                        fixed[i, j] = top / bot
-                    else:
-                        fixed[i, j] = f[i, j]
-                else:
-                    fixed[i, j] = f[i, j]
 
         # Now run the proper convolution
         for i in range(wkx, nx - wkx):
             for j in range(wky, ny - wky):
-                if not npy_isnan(fixed[i, j]):
-                    top = 0.
-                    bot = 0.
-                    for ii in range(i - wkx, i + wkx + 1):
-                        for jj in range(j - wky, j + wky + 1):
-                            val = fixed[ii, jj]
-                            ker = g[<unsigned int>(wkx + ii - i),
-                                    <unsigned int>(wky + jj - j)]
-                            if not npy_isnan(val):
-                                top += val * ker
-                                bot += ker
-                    if bot != 0:
-                        conv[i, j] = top / bot
+                top = 0.
+                bot = 0.
+                for ii in range(i - wkx, i + wkx + 1):
+                    for jj in range(j - wky, j + wky + 1):
+                        val = f[ii, jj]
+                        ker = g[<unsigned int>(nkx - 1 - (wkx + ii - i)),
+                                <unsigned int>(nky - 1 - (wky + jj - j))]
+                        if not npy_isnan(val):
+                            top += val * ker
+                            bot += ker
+                if normalize_by_kernel:
+                    if bot == 0:
+                        conv[i, j] = f[i, j]
                     else:
-                        conv[i, j] = fixed[i, j]
+                        conv[i, j] = top / bot
                 else:
-                    conv[i, j] = fixed[i, j]
+                    conv[i, j] = top
     # GIL acquired again here
     return conv
 
 
 @cython.boundscheck(False)  # turn off bounds-checking for entire function
 def convolve3d_boundary_none(np.ndarray[DTYPE_t, ndim=3] f,
-                             np.ndarray[DTYPE_t, ndim=3] g):
+                             np.ndarray[DTYPE_t, ndim=3] g,
+                             bint normalize_by_kernel):
 
     if g.shape[0] % 2 != 1 or g.shape[1] % 2 != 1 or g.shape[2] % 2 != 1:
         raise ValueError("Convolution kernel must have odd dimensions")
+
+    _raise_if_kernel_larger_than_array(f.shape, g.shape, 3)
 
     assert f.dtype == DTYPE and g.dtype == DTYPE
 
@@ -175,7 +165,6 @@ def convolve3d_boundary_none(np.ndarray[DTYPE_t, ndim=3] f,
 
     # The following need to be set to zeros rather than empty because the
     # boundary does not get reset.
-    cdef np.ndarray[DTYPE_t, ndim=3] fixed = np.zeros([nx, ny, nz], dtype=DTYPE)
     cdef np.ndarray[DTYPE_t, ndim=3] conv = np.zeros([nx, ny, nz], dtype=DTYPE)
 
     cdef unsigned int i, j, k, ii, jj, kk
@@ -186,54 +175,29 @@ def convolve3d_boundary_none(np.ndarray[DTYPE_t, ndim=3] f,
 
     # release the GIL
     with nogil:
-        # Need a first pass to replace NaN values with value convolved from
-        # neighboring values
-        for i in range(nx):
-            for j in range(ny):
-                for k in range(nz):
-                    if npy_isnan(f[i, j, k]) and i >= wkx and i < nx - wkx \
-                    and j >= wky and j < ny - wky and k >= wkz and k <= nz - wkz:
-                        top = 0.
-                        bot = 0.
-                        for ii in range(i - wkx, i + wkx + 1):
-                            for jj in range(j - wky, j + wky + 1):
-                                for kk in range(k - wkz, k + wkz + 1):
-                                    val = f[ii, jj, kk]
-                                    if not npy_isnan(val):
-                                        ker = g[<unsigned int>(wkx + ii - i),
-                                                <unsigned int>(wky + jj - j),
-                                                <unsigned int>(wkz + kk - k)]
-                                        top += val * ker
-                                        bot += ker
-                        if bot != 0.:
-                            fixed[i, j, k] = top / bot
-                        else:
-                            fixed[i, j, k] = f[i, j, k]
-                    else:
-                        fixed[i, j, k] = f[i, j, k]
 
         # Now run the proper convolution
         for i in range(wkx, nx - wkx):
             for j in range(wky, ny - wky):
                 for k in range(wkz, nz - wkz):
-                    if not npy_isnan(fixed[i, j, k]):
-                        top = 0.
-                        bot = 0.
-                        for ii in range(i - wkx, i + wkx + 1):
-                            for jj in range(j - wky, j + wky + 1):
-                                for kk in range(k - wkz, k + wkz + 1):
-                                    val = fixed[ii, jj, kk]
-                                    ker = g[<unsigned int>(wkx + ii - i),
-                                            <unsigned int>(wky + jj - j),
-                                            <unsigned int>(wkz + kk - k)]
-                                    if not npy_isnan(val):
-                                        top += val * ker
-                                        bot += ker
-                        if bot != 0:
-                            conv[i, j, k] = top / bot
+                    top = 0.
+                    bot = 0.
+                    for ii in range(i - wkx, i + wkx + 1):
+                        for jj in range(j - wky, j + wky + 1):
+                            for kk in range(k - wkz, k + wkz + 1):
+                                val = f[ii, jj, kk]
+                                ker = g[<unsigned int>(nkx - 1 - (wkx + ii - i)),
+                                        <unsigned int>(nky - 1 - (wky + jj - j)),
+                                        <unsigned int>(nkz - 1 - (wkz + kk - k))]
+                                if not npy_isnan(val):
+                                    top += val * ker
+                                    bot += ker
+                    if normalize_by_kernel:
+                        if bot == 0:
+                            conv[i, j, k] = f[i, j, k]
                         else:
-                            conv[i, j, k] = fixed[i, j, k]
+                            conv[i, j, k] = top / bot
                     else:
-                        conv[i, j, k] = fixed[i, j, k]
+                        conv[i, j, k] = top
     # GIL acquired again here
     return conv

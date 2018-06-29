@@ -2,25 +2,27 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 """
-This package defines units used in the CDS format.
+This package defines units used in the CDS format, both the units
+defined in `Centre de Données astronomiques de Strasbourg
+<http://cds.u-strasbg.fr/>`_ `Standards for Astronomical Catalogues 2.0
+<http://cds.u-strasbg.fr/doc/catstd-3.2.htx>`_ format and the `complete
+set of supported units <http://vizier.u-strasbg.fr/cgi-bin/Unit>`_.
+This format is used by VOTable up to version 1.2.
 
-Contains the units defined in `Centre de Données astronomiques de
-Strasbourg <http://cds.u-strasbg.fr/>`_ `Standards for Astronomical
-Catalogues 2.0 <http://cds.u-strasbg.fr/doc/catstd-3.2.htx>`_ format,
-and the `complete set of supported units
-<http://vizier.u-strasbg.fr/cgi-bin/Unit>`_.  This format is used by
-VOTable up to version 1.2.
+These units are not available in the top-level `astropy.units`
+namespace.  To use these units, you must import the `astropy.units.cds`
+module::
 
-To include them in `~astropy.units.UnitBase.compose` and the results
-of `~astropy.units.UnitBase.find_equivalent_units`, do::
+    >>> from astropy.units import cds
+    >>> q = 10. * cds.lyr  # doctest: +SKIP
+
+To include them in `~astropy.units.UnitBase.compose` and the results of
+`~astropy.units.UnitBase.find_equivalent_units`, do::
 
     >>> from astropy.units import cds
     >>> cds.enable()  # doctest: +SKIP
-
 """
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 _ns = globals()
 
@@ -153,7 +155,6 @@ def _initialize_module():
     # it as its own new disconnected unit.
     core.def_unit(['Crab'], prefixes=prefixes, namespace=_ns,
                   doc="Crab (X-ray) flux")
-
 
 
 _initialize_module()

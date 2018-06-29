@@ -1,17 +1,15 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-Observatories accessible without internet access originate from the IRAF
-Observatory Database, and are stored in ``data/observatories.json``.  This is
-intended mainly as a fallback file, and the online file is where new changes
-should go.
+Currently the only site accessible without internet access is the Royal
+Greenwich Observatory, as an example (and for testing purposes).  In future
+releases, a canonical set of sites may be bundled into astropy for when the
+online registry is unavailable.
 
 Additions or corrections to the observatory list can be submitted via Pull
 Request to the [astropy-data GitHub repository](https://github.com/astropy/astropy-data),
 updating the ``location.json`` file.
 """
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 import json
 from difflib import get_close_matches
@@ -19,6 +17,7 @@ from collections import Mapping
 
 from ..utils.data import get_pkg_data_contents, get_file_contents
 from .earth import EarthLocation
+from .errors import UnknownSiteException
 from .. import units as u
 
 
@@ -54,13 +53,9 @@ class SiteRegistry(Mapping):
         if site_name.lower() not in self._lowercase_names_to_locations:
             # If site name not found, find close matches and suggest them in error
             close_names = get_close_matches(site_name, self._lowercase_names_to_locations)
-            close_names = sorted(close_names, key=lambda x: len(x))
+            close_names = sorted(close_names, key=len)
 
-            errmsg = ('Site "{0}" not in database. Use ``get_names()`` to see '
-                      'available sites.'.format(site_name))
-            if close_names:
-                errmsg += ' Did you mean one of: "{0}"?'.format('", "'.join(close_names))
-            raise KeyError(errmsg)
+            raise UnknownSiteException(site_name, "the 'names' attribute", close_names=close_names)
 
         return self._lowercase_names_to_locations[site_name.lower()]
 
@@ -95,7 +90,7 @@ class SiteRegistry(Mapping):
         ----------
         names : list of str
             All the names this site should go under
-        locationobj: `~astropy.coordinates.EarthLocation`
+        locationobj : `~astropy.coordinates.EarthLocation`
             The actual site object
         """
         for name in names:
@@ -126,9 +121,17 @@ def get_builtin_sites():
     return SiteRegistry.from_json(jsondb)
 
 
-def get_downloaded_sites(jsonurl='http://data.astropy.org/coordinates/sites.json'):
+def get_downloaded_sites(jsonurl=None):
     """
     Load observatory database from data.astropy.org and parse into a SiteRegistry
     """
-    jsondb = json.loads(get_file_contents(jsonurl, show_progress=False))
+
+    # we explicitly set the encoding because the default is to leave it set by
+    # the users' locale, which may fail if it's not matched to the sites.json
+    if jsonurl is None:
+        content = get_pkg_data_contents('coordinates/sites.json', encoding='UTF-8')
+    else:
+        content = get_file_contents(jsonurl, encoding='UTF-8')
+
+    jsondb = json.loads(content)
     return SiteRegistry.from_json(jsondb)

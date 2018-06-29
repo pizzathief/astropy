@@ -277,11 +277,7 @@ PyWcsprm_init(
 
     return 0;
   } else { /* header != NULL */
-    #if PY3K
     if (PyBytes_AsStringAndSize(header_obj, &header, &header_length)) {
-    #else
-    if (PyString_AsStringAndSize(header_obj, &header, &header_length)) {
-    #endif
       return -1;
     }
 
@@ -290,11 +286,7 @@ PyWcsprm_init(
     } else if (relax_obj == NULL || relax_obj == Py_False) {
       relax = WCSHDR_none;
     } else {
-      #if PY3K
       relax = (int)PyLong_AsLong(relax_obj);
-      #else
-      relax = (int)PyInt_AsLong(relax_obj);
-      #endif
       if (relax == -1) {
         PyErr_SetString(
             PyExc_ValueError,
@@ -378,7 +370,7 @@ PyWcsprm_init(
 
     if (status != 0) {
       free(colsel_ints);
-      wcshdr_err_to_python_exc(wcs->err);
+      wcshdr_err_to_python_exc(status);
       return -1;
     }
 
@@ -414,7 +406,7 @@ PyWcsprm_init(
     free(colsel_ints);
 
     if (status != 0) {
-      wcshdr_err_to_python_exc(wcs->err);
+      wcshdr_err_to_python_exc(status);
       return -1;
     }
 
@@ -482,6 +474,7 @@ PyWcsprm_bounds_check(
       bounds |= 1;
   }
 
+  wcsprm_python2c(&self->x);
   wcsbchk(&self->x, bounds);
 
   Py_RETURN_NONE;
@@ -549,11 +542,7 @@ PyWcsprm_find_all_wcs(
     return NULL;
   }
 
-  #if PY3K
   if (PyBytes_AsStringAndSize(header_obj, &header, &header_length)) {
-  #else
-  if (PyString_AsStringAndSize(header_obj, &header, &header_length)) {
-  #endif
     return NULL;
   }
 
@@ -570,11 +559,7 @@ PyWcsprm_find_all_wcs(
   } else if (relax_obj == NULL || relax_obj == Py_False) {
     relax = WCSHDR_none;
   } else {
-    #if PY3K
     relax = (int)PyLong_AsLong(relax_obj);
-    #else
-    relax = (int)PyInt_AsLong(relax_obj);
-    #endif
     if (relax == -1) {
       PyErr_SetString(
           PyExc_ValueError,
@@ -613,7 +598,7 @@ PyWcsprm_find_all_wcs(
   Py_END_ALLOW_THREADS
 
   if (status != 0) {
-    wcshdr_err_to_python_exc(wcs->err);
+    wcshdr_err_to_python_exc(status);
     return NULL;
   }
 
@@ -648,7 +633,7 @@ PyWcsprm_find_all_wcs(
   Py_END_ALLOW_THREADS
 
   if (status != 0) {
-    wcshdr_err_to_python_exc(wcs->err);
+    wcshdr_err_to_python_exc(status);
     return NULL;
   }
 
@@ -695,11 +680,7 @@ PyWcsprm_cdfix(
   wcsprm_c2python(&self->x);
 
   if (status == -1 || status == 0) {
-    #if PY3K
     return PyLong_FromLong((long)status);
-    #else
-    return PyInt_FromLong((long)status);
-    #endif
   } else {
     wcserr_fix_to_python_exc(self->x.err);
     return NULL;
@@ -717,11 +698,7 @@ PyWcsprm_celfix(
   wcsprm_c2python(&self->x);
 
   if (status == -1 || status == 0) {
-    #if PY3K
     return PyLong_FromLong((long)status);
-    #else
-    return PyInt_FromLong((long)status);
-    #endif
   } else {
     wcserr_fix_to_python_exc(self->x.err);
     return NULL;
@@ -810,11 +787,7 @@ PyWcsprm_cylfix(
   Py_XDECREF(naxis_array);
 
   if (status == -1 || status == 0) {
-    #if PY3K
     return PyLong_FromLong((long)status);
-    #else
-    return PyInt_FromLong((long)status);
-    #endif
   } else {
     wcserr_fix_to_python_exc(self->x.err);
     return NULL;
@@ -832,11 +805,7 @@ PyWcsprm_datfix(
   wcsprm_c2python(&self->x);
 
   if (status == -1 || status == 0) {
-    #if PY3K
     return PyLong_FromLong((long)status);
-    #else
-    return PyInt_FromLong((long)status);
-    #endif
   } else {
     wcserr_fix_to_python_exc(self->x.err);
     return NULL;
@@ -931,11 +900,7 @@ PyWcsprm_fix(
         message = "No change";
       }
     }
-    #if PY3K
     subresult = PyUnicode_FromString(message);
-    #else
-    subresult = PyString_FromString(message);
-    #endif
     if (subresult == NULL ||
         PyDict_SetItemString(result, message_map[i].name, subresult)) {
       Py_XDECREF(subresult);
@@ -1609,11 +1574,7 @@ PyWcsprm_spcfix(
   wcsprm_c2python(&self->x);
 
   if (status == -1 || status == 0) {
-    #if PY3K
     return PyLong_FromLong((long)status);
-    #else
-    return PyInt_FromLong((long)status);
-    #endif
   } else {
     wcserr_fix_to_python_exc(self->x.err);
     return NULL;
@@ -1675,11 +1636,7 @@ PyWcsprm___str__(
   wcsprt(&self->x);
   wcsprm_c2python(&self->x);
 
-  #if PY3K
   return PyUnicode_FromString(wcsprintf_buf());
-  #else
-  return PyString_FromString(wcsprintf_buf());
-  #endif
 }
 
 PyObject *PyWcsprm_richcompare(PyObject *a, PyObject *b, int op) {
@@ -1798,13 +1755,8 @@ PyWcsprm_sub(
             "string values for axis sequence must be one of 'latitude', 'longitude', 'cubeface', 'spectral', 'stokes', or 'celestial'");
           goto exit;
         }
-      #if PY3K
       } else if (PyLong_Check(element)) {
         tmp = (Py_ssize_t)PyLong_AsSsize_t(element);
-      #else
-      } else if (PyInt_Check(element)) {
-        tmp = (Py_ssize_t)PyInt_AsLong(element);
-      #endif
         if (tmp == -1 && PyErr_Occurred()) {
           goto exit;
         }
@@ -1821,13 +1773,8 @@ PyWcsprm_sub(
       Py_DECREF(element);
       element = NULL;
     }
-  #if PY3K
   } else if (PyLong_Check(py_axes)) {
     tmp = (Py_ssize_t)PyLong_AsSsize_t(py_axes);
-  #else
-  } else if (PyInt_Check(py_axes)) {
-    tmp = (Py_ssize_t)PyInt_AsLong(py_axes);
-  #endif
     if (tmp == -1 && PyErr_Occurred()) {
       goto exit;
     }
@@ -1870,9 +1817,7 @@ PyWcsprm_sub(
  exit:
   free(axes);
   Py_XDECREF(element);
-  #if PY3K
   Py_XDECREF(element_utf8);
-  #endif
 
   if (status == 0) {
     return (PyObject*)py_dest_wcs;
@@ -1912,11 +1857,7 @@ PyWcsprm_to_header(
   } else if (relax_obj == NULL || relax_obj == Py_False) {
     relax = WCSHDO_safe;
   } else {
-    #if PY3K
     relax = (int)PyLong_AsLong(relax_obj);
-    #else
-    relax = (int)PyInt_AsLong(relax_obj);
-    #endif
     if (relax == -1) {
       PyErr_SetString(
           PyExc_ValueError,
@@ -1934,13 +1875,9 @@ PyWcsprm_to_header(
     goto exit;
   }
 
-  /* Just return the raw header string.  PyFITS on the Python side will help
-     to parse and use this information. */
-  #if PY3K
+  /* Just return the raw header string.  astropy.io.fits on the Python side will
+     help to parse and use this information. */
   result = PyUnicode_FromStringAndSize(header, (Py_ssize_t)nkeyrec * 80);
-  #else
-  result = PyString_FromStringAndSize(header, (Py_ssize_t)nkeyrec * 80);
-  #endif
 
  exit:
   free(header);
@@ -1973,11 +1910,7 @@ PyWcsprm_unitfix(
   status = unitfix(ctrl, &self->x);
 
   if (status == -1 || status == 0) {
-    #if PY3K
     return PyLong_FromLong((long)status);
-    #else
-    return PyInt_FromLong((long)status);
-    #endif
   } else {
     wcserr_fix_to_python_exc(self->x.err);
     return NULL;
@@ -3374,12 +3307,7 @@ static PyMethodDef PyWcsprm_methods[] = {
 };
 
 PyTypeObject PyWcsprmType = {
-  #if PY3K
   PyVarObject_HEAD_INIT(NULL, 0)
-  #else
-  PyObject_HEAD_INIT(NULL)
-  0,                            /*ob_size*/
-  #endif
   "astropy.wcs.Wcsprm",              /*tp_name*/
   sizeof(PyWcsprm),             /*tp_basicsize*/
   0,                            /*tp_itemsize*/
@@ -3488,6 +3416,13 @@ _setup_wcsprm_type(
     CONSTANT(WCSHDO_CRPXna)    ||
     CONSTANT(WCSHDO_CNAMna)    ||
     CONSTANT(WCSHDO_WCSNna)    ||
+    CONSTANT(WCSHDO_P12)       ||
+    CONSTANT(WCSHDO_P13)       ||
+    CONSTANT(WCSHDO_P14)       ||
+    CONSTANT(WCSHDO_P15)       ||
+    CONSTANT(WCSHDO_P16)       ||
+    CONSTANT(WCSHDO_P17)       ||
+    CONSTANT(WCSHDO_EFMT)      ||
     CONSTANT(WCSCOMPARE_ANCILLARY) ||
     CONSTANT(WCSCOMPARE_TILING) ||
     CONSTANT(WCSCOMPARE_CRPIX));

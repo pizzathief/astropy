@@ -1,24 +1,33 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-from __future__ import (absolute_import, unicode_literals, division,
-                        print_function)
 
 import inspect
+from copy import deepcopy
 
+import pickle
+import pytest
 import numpy as np
 
-from numpy.testing.utils import (assert_allclose, assert_array_equal,
-                                 assert_almost_equal)
+from numpy.testing import assert_allclose, assert_array_equal
 
-from ...extern.six.moves import cPickle as pickle
-from ...tests.helper import pytest
-
+from ...utils import minversion
 from ..core import Model, ModelDefinitionError
 from ..parameters import Parameter
 from ..models import (Const1D, Shift, Scale, Rotation2D, Gaussian1D,
                       Gaussian2D, Polynomial1D, Polynomial2D,
                       Chebyshev2D, Legendre2D, Chebyshev1D, Legendre1D,
-                      AffineTransformation2D, Identity, Mapping)
+                      AffineTransformation2D, Identity, Mapping,
+                      Tabular1D)
+
+
+try:
+    import scipy
+    from scipy import optimize  # pylint: disable=W0611
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
+HAS_SCIPY_14 = HAS_SCIPY and minversion(scipy, "0.14")
 
 
 @pytest.mark.parametrize(('expr', 'result'),
@@ -47,6 +56,34 @@ def test_two_model_class_arithmetic_1d(expr, result):
     out = s(0)
     assert out == result
     assert isinstance(out, float)
+
+
+@pytest.mark.parametrize(('expr', 'result'),
+                         [(lambda x, y: x + y, [5.0, 5.0]),
+                          (lambda x, y: x - y, [-1.0, -1.0]),
+                          (lambda x, y: x * y, [6.0, 6.0]),
+                          (lambda x, y: x / y, [2.0 / 3.0, 2.0 / 3.0]),
+                          (lambda x, y: x ** y, [8.0, 8.0])])
+def test_model_set(expr, result):
+    s = expr(Const1D((2, 2), n_models=2), Const1D((3, 3), n_models=2))
+    out = s(0, model_set_axis=False)
+
+    assert_array_equal(out, result)
+
+
+@pytest.mark.parametrize(('expr', 'result'),
+                         [(lambda x, y: x + y, [5.0, 5.0]),
+                          (lambda x, y: x - y, [-1.0, -1.0]),
+                          (lambda x, y: x * y, [6.0, 6.0]),
+                          (lambda x, y: x / y, [2.0 / 3.0, 2.0 / 3.0]),
+                          (lambda x, y: x ** y, [8.0, 8.0])])
+def test_model_set_raises_value_error(expr, result):
+    """Check that creating model sets with components whose _n_models are
+       different raise a value error
+    """
+
+    with pytest.raises(ValueError):
+        s = expr(Const1D((2, 2), n_models=2), Const1D(3, n_models=1))
 
 
 @pytest.mark.parametrize(('expr', 'result'),
@@ -153,65 +190,27 @@ def test_simple_two_model_class_compose_2d():
     assert_allclose(r3(0, 1), (0, -1), atol=1e-10)
 
 
-class TestCompositeLegacy(object):
+def test_n_submodels():
     """
-    Tests inspired by the original _CompositeModel tests in test_core.py,
-    this implements the equivalent tests implemented in the new framework.
-
-    Note: These aren't *exactly* the same as the original tests, as they used
-    overly trivial models (polynomials with all coeffs 0).
+    Test that CompoundModel.n_submodels properly returns the number
+    of components.
     """
+    g2 = Gaussian1D() + Gaussian1D()
+    assert g2.n_submodels() == 2
 
-    def setup_class(self):
-        self.y, self.x = np.mgrid[:5, :5]
+    g3 = g2 + Gaussian1D()
+    assert g3.n_submodels() == 3
 
-    def test_single_array_input(self):
-        p1 = Polynomial1D(3, c0=1, c1=2, c2=3, c3=4)
-        p2 = Polynomial1D(3, c0=2, c1=3, c2=4, c3=5)
-        m = p1 | p2
-        assert_almost_equal(p2(p1(self.x)), m(self.x))
+    g5 = g3 | g2
+    assert g5.n_submodels() == 5
 
-    def test_labeledinput_1(self):
-        # Note: No actual use of LabeledInput in this test; this just uses the
-        # same name for symmetry with the old tests
-        p1 = Polynomial1D(3, c0=1, c1=2, c2=3, c3=4)
-        p2 = Polynomial2D(3, c0_0=1, c2_0=2, c0_1=3, c2_1=4)
-        m = p2 | p1
-        assert_almost_equal(p1(p2(self.x, self.y)), m(self.x, self.y))
+    g7 = g5 / g2
+    assert g7.n_submodels() == 7
 
-    def test_labledinput_2(self):
-        rot = Rotation2D(angle=23.4)
-        offx = Shift(-2)
-        offy = Shift(1.2)
-        m = rot | (offx & Identity(1)) | (Identity(1) & offy)
+    # make sure it works as class method
+    p = Polynomial1D + Polynomial1D
 
-        x, y = rot(self.x, self.y)
-        x = offx(x)
-        y = offy(y)
-
-        assert_almost_equal(x, m(self.x, self.y)[0])
-        assert_almost_equal(y, m(self.x, self.y)[1])
-
-        a = np.deg2rad(23.4)
-        # For kicks
-        matrix = [[np.cos(a), -np.sin(a)],
-                  [np.sin(a), np.cos(a)]]
-        x, y = AffineTransformation2D(matrix, [-2, 1.2])(self.x, self.y)
-        assert_almost_equal(x, m(self.x, self.y)[0])
-        assert_almost_equal(y, m(self.x, self.y)[1])
-
-    def test_multiple_input(self):
-        """
-        Despite the name, this actually tests inverting composite models,
-        which is not yet supported in the new framework (but should be).
-        """
-
-        rot = Rotation2D(-60)
-        m = rot | rot
-        xx, yy = m(self.x, self.y)
-        x0, y0 = m.inverse(xx, yy)
-        assert_almost_equal(x0, self.x)
-        assert_almost_equal(y0, self.y)
+    assert p.n_submodels() == 2
 
 
 def test_expression_formatting():
@@ -290,9 +289,7 @@ def test_indexing_on_class():
 
     M = Gaussian1D + p
     assert M[0] is Gaussian1D
-    assert M[1] is p
-    assert M['Gaussian1D'] is M[0]
-    assert M['p'] is M[1]
+    assert isinstance(M['p'], Polynomial1D)
 
     m = g + p
     assert isinstance(m[0], Gaussian1D)
@@ -435,7 +432,6 @@ def test_indexing_on_instance():
     assert const.amplitude == 42
     const.amplitude = 137
     assert m.amplitude_1 == 137
-
 
     # Similar couple of tests, but now where the compound model was created
     # from model instances
@@ -584,7 +580,7 @@ def test_slicing_on_instances_2():
     with pytest.raises(IndexError):
         m['x']
     with pytest.raises(IndexError):
-        m['a' : 'r']
+        m['a': 'r']
 
     with pytest.raises(ModelDefinitionError):
         assert m[-4:4].submodel_names == ('b', 'c', 'd')
@@ -619,7 +615,7 @@ def test_slicing_on_instances_3():
     with pytest.raises(IndexError):
         m['x']
     with pytest.raises(IndexError):
-        m['a' : 'r']
+        m['a': 'r']
     assert m[-4:4].submodel_names == ('b', 'c', 'd')
     assert m[-4:-2].submodel_names == ('b', 'c')
 
@@ -752,6 +748,11 @@ def test_inherit_constraints(model):
     Regression test for https://github.com/astropy/astropy/issues/3481
     """
 
+    # We have to copy the model before modifying it, otherwise the test fails
+    # if it is run twice in a row, because the state of the model instance
+    # would be preserved from one run to the next.
+    model = deepcopy(model)
+
     # Lots of assertions in this test as there are multiple interfaces to
     # parameter constraints
 
@@ -843,7 +844,6 @@ class _TestPickleModel(Gaussian1D + Gaussian1D):
     pass
 
 
-@pytest.mark.skipif(str("sys.version_info < (2, 7, 3)"))
 def test_pickle_compound():
     """
     Regression test for
@@ -883,13 +883,48 @@ def test_pickle_compound():
     assert pickle.loads(p) is _TestPickleModel
 
 
-@pytest.mark.skipif(str("sys.version_info >= (2, 7, 3)"))
-def test_pickle_compound_fallback():
-    """
-    Test fallback for pickling compound model on old versions of Python
-    affected by http://bugs.python.org/issue7689
-    """
+def test_update_parameters():
+    offx = Shift(1)
+    scl = Scale(2)
+    m = offx | scl
+    assert(m(1) == 4)
 
-    gg = (Gaussian1D + Gaussian1D)()
-    with pytest.raises(RuntimeError):
-        pickle.dumps(gg)
+    offx.offset = 42
+    assert(m(1) == 4)
+
+    m.factor_1 = 100
+    assert(m(1) == 200)
+    m2 = m | offx
+    assert(m2(1) == 242)
+
+
+def test_name():
+    offx = Shift(1)
+    scl = Scale(2)
+    m = offx | scl
+    scl.name = "scale"
+    assert m._submodel_names == ('None_0', 'None_1')
+    assert m.name is None
+    m.name = "M"
+    assert m.name == "M"
+    m1 = m.rename("M1")
+    assert m.name == "M"
+    assert m1.name == "M1"
+
+@pytest.mark.skipif("not HAS_SCIPY_14")
+def test_tabular_in_compound():
+    """
+    Issue #7411 - evaluate should not change the shape of the output.
+    """
+    t = Tabular1D(points=([1, 5, 7],), lookup_table=[12, 15, 19],
+                  bounds_error=False)
+    rot = Rotation2D(2)
+    p = Polynomial1D(1)
+    x = np.arange(12).reshape((3,4))
+    # Create a compound model which does ot execute Tabular.__call__,
+    # but model.evaluate and is followed by a Rotation2D which
+    # checks the exact shapes.
+    model = p & t | rot
+    x1, y1 = model(x, x)
+    assert x1.ndim == 2
+    assert y1.ndim == 2

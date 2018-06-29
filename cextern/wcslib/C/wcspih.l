@@ -1,7 +1,7 @@
 /*============================================================================
 
-  WCSLIB 5.9 - an implementation of the FITS WCS standard.
-  Copyright (C) 1995-2015, Mark Calabretta
+  WCSLIB 5.18 - an implementation of the FITS WCS standard.
+  Copyright (C) 1995-2018, Mark Calabretta
 
   This file is part of WCSLIB.
 
@@ -22,7 +22,7 @@
 
   Author: Mark Calabretta, Australia Telescope National Facility, CSIRO.
   http://www.atnf.csiro.au/people/Mark.Calabretta
-  $Id: wcspih.l,v 5.9 2015/07/21 09:20:01 mcalabre Exp $
+  $Id: wcspih.l,v 5.18 2018/01/10 08:32:14 mcalabre Exp $
 *=============================================================================
 *
 * wcspih.l is a Flex description file containing the definition of a lexical
@@ -71,6 +71,7 @@
 %option noyywrap
 %option outfile="wcspih.c"
 %option prefix="wcspih"
+%option reentrant
 
 /* Indices for parameterized keywords. */
 Z1	[0-9]
@@ -133,8 +134,39 @@ INLINE " "*(\/.*)?
 #define DSS     2
 #define WAT     3
 
-#define YY_DECL int wcspih(char *header, int nkeyrec, int relax, int ctrl, \
-                           int *nreject, int *nwcs, struct wcsprm **wcs)
+static int wcspih_scanner(char *header, int nkeyrec, int relax, int ctrl,
+                          int *nreject, int *nwcs, struct wcsprm **wcs,
+                          yyscan_t yyscanner);
+
+/*--------------------------------------------------------------------------*/
+
+int wcspih(
+  char *header,
+  int nkeyrec,
+  int relax,
+  int ctrl,
+  int *nreject,
+  int *nwcs,
+  struct wcsprm **wcs)
+
+{
+  int status;
+  yyscan_t yyscanner;
+  int yylex_init(yyscan_t *yyscanner);
+  int yylex_destroy(yyscan_t yyscanner);
+
+  yylex_init(&yyscanner);
+  status = wcspih_scanner(header, nkeyrec, relax, ctrl, nreject, nwcs, wcs,
+                          yyscanner);
+  yylex_destroy(yyscanner);
+
+  return status;
+}
+
+/*--------------------------------------------------------------------------*/
+
+#define YY_DECL int wcspih_scanner(char *header, int nkeyrec, int relax, \
+ int ctrl, int *nreject, int *nwcs, struct wcsprm **wcs, yyscan_t yyscanner)
 
 #define YY_INPUT(inbuff, count, bufsize) \
 	{ \
@@ -153,8 +185,8 @@ INLINE " "*(\/.*)?
 char *wcspih_hdr;
 int  wcspih_nkeyrec;
 
-int wcspih_final(int alts[], int ndp[], int ndq[], int distran,
-        double dsstmp[], char *wat[], int *nwcs, struct wcsprm **wcs);
+int wcspih_final(int ndp[], int ndq[], int distran, double dsstmp[],
+        char *wat[], int *nwcs, struct wcsprm **wcs);
 int wcspih_inits(int naxis, int alts[], int dpq[], int npv[], int nps[],
         int ndp[], int ndq[], int distran, int *nwcs, struct wcsprm **wcs);
 void wcspih_naxes(int naxis, int i, int j, char a, int distype, int alts[],
@@ -185,7 +217,6 @@ jmp_buf wcspih_abort_jmp_env;
 	struct disprm *disp, distem;
 	struct wcsprm *wcsp, wcstem;
 	int (*special)(double *, double);
-	int yylex_destroy(void);
 	
 	naxis = 0;
 	for (ialt = 0; ialt < 27; ialt++) {
@@ -1018,12 +1049,12 @@ jmp_buf wcspih_abort_jmp_env;
 	}
 
 ^PLATEID" " {
-	  /* DSS: plate identification. */
+	  /* DSS: plate identification (insufficient to trigger DSS). */
 	  valtype = STRING;
 	  distype = SEQUENT;
 	  vptr    = dsstmp+13;
 	  dssflag = 2;
-	  distran = DSS;
+	  distran = 0;
 	
 	  keyname = "PLATEID";
 	  BEGIN(VALUE);
@@ -1525,7 +1556,7 @@ jmp_buf wcspih_abort_jmp_env;
 	
 	  } else {
 	    /* Read the keyvalue. */
-	    wcsutil_str2double(yytext, "%lf", &dbltmp);
+	    wcsutil_str2double(yytext, &dbltmp);
 	
 	    BEGIN(COMMENT);
 	  }
@@ -1613,7 +1644,7 @@ jmp_buf wcspih_abort_jmp_env;
 
 <RECVALUE>{FLOAT} {
 	  rectype = 1;
-	  wcsutil_str2double(yytext, "%lf", &dbltmp);
+	  wcsutil_str2double(yytext, &dbltmp);
 	  BEGIN(RECEND);
 	}
 
@@ -1647,7 +1678,7 @@ jmp_buf wcspih_abort_jmp_env;
 	      if (vptr) {
 	        if (sipflag) {
 	          /* Translate a SIP keyword into DPja. */
-	          disp = wcsp->lin.dispre;
+	          disp = (*wcs)->lin.dispre;
 	          ipx = (disp->ndp)++;
 	
 	          /* SIP doesn't have alternates. */
@@ -1673,7 +1704,7 @@ jmp_buf wcspih_abort_jmp_env;
 	          } else {
 	            /* Translate a DSS keyword into DQia. */
 	            if (m <= 13 || dbltmp != 0.0) {
-	              disp = wcsp->lin.disseq;
+	              disp = (*wcs)->lin.disseq;
 	              ipx = (disp->ndp)++;
 	
 	              /* DSS doesn't have alternates. */
@@ -1764,7 +1795,12 @@ jmp_buf wcspih_abort_jmp_env;
 	          } else if (valtype == RECORD) {
 	            ipx = (disp->ndp)++;
 	
-	            sprintf(keyword, "%.2s%d%c", keyname, i, a);
+	            if (a == ' ') {
+	              sprintf(keyword, "%.2s%d", keyname, i);
+	            } else {
+	              sprintf(keyword, "%.2s%d%c", keyname, i, a);
+	            }
+	
 	            dpfill(disp->dp+ipx, keyword, strtmp, i, rectype, inttmp,
 	                   dbltmp);
 	          }
@@ -1777,12 +1813,12 @@ jmp_buf wcspih_abort_jmp_env;
 	    if (gotone) {
 	      nvalid++;
 	      if (ctrl == 4) {
-	        if (distran == 0) {
-	          wcsfprintf(stderr, "%.80s\n  Accepted (%d) as a "
-	            "valid WCS keyrecord.\n", keyrec, nvalid);
-	        } else {
+	        if (distran || dssflag) {
 	          wcsfprintf(stderr, "%.80s\n  Accepted (%d) as a "
 	            "recognised WCS convention.\n", keyrec, nvalid);
+	        } else {
+	          wcsfprintf(stderr, "%.80s\n  Accepted (%d) as a "
+	            "valid WCS keyrecord.\n", keyrec, nvalid);
 	        }
 	      }
 	
@@ -1886,7 +1922,6 @@ jmp_buf wcspih_abort_jmp_env;
 	    if ((status = wcspih_inits(naxis, alts, dpq, npv, nps, ndp, ndq,
 	                               distran, nwcs, wcs)) ||
 	        (*nwcs == 0 && ctrl == 0)) {
-	      yylex_destroy();
 	      return status;
 	    }
 	
@@ -1927,10 +1962,9 @@ jmp_buf wcspih_abort_jmp_env;
 	    dssflag = 0;
 	    watflag = 0;
 	
-	    yyrestart(yyin);
+	    yyrestart(yyin, yyscanner);
 	
 	  } else {
-	    yylex_destroy();
 	
 	    if (ctrl < 0) {
 	      *hptr = '\0';
@@ -1947,8 +1981,9 @@ jmp_buf wcspih_abort_jmp_env;
 	        "keyrecords.\n", nother, (nother==1)?"":"s");
 	    }
 	
-	    return wcspih_final(alts, ndp, ndq, distran, dsstmp, wat, nwcs,
-	                        wcs);
+	    status = wcspih_final(ndp, ndq, distran, dsstmp, wat, nwcs, wcs);
+	    free(watstr);
+	    return status;
 	  }
 	}
 
@@ -2050,11 +2085,6 @@ int wcspih_inits(
       return WCSHDRERR_MEMORY;
     }
 
-    /* Record the current values of NPVMAX, NPSMAX, and NDPMAX. */
-    npvmax = wcsnpv(-1);
-    npsmax = wcsnps(-1);
-    ndpmax = disndp(-1);
-
     ndis = 0;
     if (distran == SIP) {
       /* DPja.NAXES and DPja.OFFSET.j to be added for SIP (see below and
@@ -2072,9 +2102,9 @@ int wcspih_inits(
     for (ialt = 0; ialt < 27; ialt++) {
       if (alts[ialt]) {
         wcsp->flag = -1;
-        wcsnpv(npv[ialt]);
-        wcsnps(nps[ialt]);
-        if ((status = wcsini(1, alts[ialt], wcsp))) {
+        npvmax = npv[ialt];
+        npsmax = nps[ialt];
+        if ((status = wcsinit(1, alts[ialt], wcsp, npvmax, npsmax, -1))) {
           wcsvfree(nwcs, wcs);
           break;
         }
@@ -2097,9 +2127,9 @@ int wcspih_inits(
 
           /* Attach it to linprm.  Also inits it. */
           ndis++;
-          disndp(ndp[ialt]);
+          ndpmax = ndp[ialt];
           dis->flag = -1;
-          lindis(1, &(wcsp->lin), dis);
+          lindist(1, &(wcsp->lin), dis, ndpmax);
         }
 
         if (dpq[ialt] & 2) {
@@ -2109,9 +2139,9 @@ int wcspih_inits(
 
           /* Attach it to linprm.  Also inits it. */
           ndis++;
-          disndp(ndq[ialt]);
+          ndpmax = ndq[ialt];
           dis->flag = -1;
-          lindis(2, &(wcsp->lin), dis);
+          lindist(2, &(wcsp->lin), dis, ndpmax);
         }
 
         /* On the second pass alts[] indexes the array of wcsprm structs. */
@@ -2124,11 +2154,6 @@ int wcspih_inits(
         alts[ialt] = -1;
       }
     }
-
-    /* Restore the original values of NPVMAX, NPSMAX, and NDPMAX. */
-    wcsnpv(npvmax);
-    wcsnps(npsmax);
-    if (ndis) disndp(ndpmax);
 
 
     /* Translated distortion?  Neither SIP nor DSS have alternates, so the */
@@ -2199,7 +2224,6 @@ int wcspih_vsource(double *zsource, double vsource)
 *---------------------------------------------------------------------------*/
 
 int wcspih_final(
-  int alts[],
   int ndp[],
   int ndq[],
   int distran,
@@ -2209,7 +2233,7 @@ int wcspih_final(
   struct wcsprm **wcs)
 
 {
-  char   field[8], *wp, wpoly[12], wtype[8];
+  char   field[16], *wp, wpoly[12], wtype[8];
   int    i, ialt, idp, ipv, m, npv, n, nterms, omax, omin, status, wctrl[4];
   double A1, A2, A3, B1, B2, B3, CNPIX1, CNPIX2, *crval, Rx, Ry, S, wval,
          X0, Y0, Xc, Yc;
@@ -2294,7 +2318,7 @@ int wcspih_final(
     /* TNX and ZPX don't have alternates, nor axis mapping. */
     disp = wcsp->lin.disseq;
 
-    /* Decipher the core dump stored in the WATi_m strings. */
+    /* Disassemble the core dump stored in the WATi_m strings. */
     nterms = 0;
     for (i = 0; i < 2; i++) {
       sscanf(wat[i], "wtype=%s", wtype);
@@ -2304,7 +2328,9 @@ int wcspih_final(
       } else if (strcmp(wtype, "zpx") == 0) {
         strcpy(disp->dtype[i], "WAT-ZPX");
       } else {
-        return WCSHDRERR_PARSER;
+        /* Could contain "tan" or something else to be ignored. */
+        lindist(2, &(wcsp->lin), 0x0, 0);
+        return 0;
       }
 
       /* The PROJPn parameters are duplicated on each ZPX axis. */
@@ -2458,8 +2484,6 @@ int wcspih_final(
     }
 
     disp->ndp = idp;
-
-    free(wat[0]);
   }
 
   return 0;

@@ -1,14 +1,13 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-# TEST_UNICODE_LITERALS
 
-from __future__ import print_function  # For print debugging with python 2 or 3
 
+from collections import OrderedDict, Mapping, UserDict
+
+import pytest
 import numpy as np
 
-from ...tests.helper import pytest
 from ...table import Column, TableColumns
-from ...utils import OrderedDict
 
 
 class TestTableColumnsInit():
@@ -18,19 +17,19 @@ class TestTableColumnsInit():
         x1 = np.arange(10.)
         x2 = np.arange(5.)
         x3 = np.arange(7.)
-        col_list = [('x1',x1), ('x2',x2), ('x3',x3)]
+        col_list = [('x1', x1), ('x2', x2), ('x3', x3)]
         tc_list = TableColumns(col_list)
         for col in col_list:
             assert col[0] in tc_list
             assert tc_list[col[0]] is col[1]
 
-        col_tuple = (('x1',x1), ('x2',x2), ('x3',x3))
+        col_tuple = (('x1', x1), ('x2', x2), ('x3', x3))
         tc_tuple = TableColumns(col_tuple)
         for col in col_tuple:
             assert col[0] in tc_tuple
             assert tc_tuple[col[0]] is col[1]
 
-        col_dict = dict([('x1',x1), ('x2',x2), ('x3',x3)])
+        col_dict = dict([('x1', x1), ('x2', x2), ('x3', x3)])
         tc_dict = TableColumns(col_dict)
         for col in tc_dict.keys():
             assert col in tc_dict
@@ -43,7 +42,7 @@ class TestTableColumnsInit():
             assert tc[col.name] is col
 
 
-#pytest.mark.usefixtures('table_type')
+# pytest.mark.usefixtures('table_type')
 class BaseInitFrom():
     def _setup(self, table_type):
         pass
@@ -78,6 +77,7 @@ class BaseInitFrom():
         self._setup(table_type)
         with pytest.raises(ValueError):
             table_type(self.data, names=('a',), dtype=('i4'))
+
 
 @pytest.mark.usefixtures('table_type')
 class BaseInitFromListLike(BaseInitFrom):
@@ -226,6 +226,7 @@ class TestInitFromColsList(BaseInitFromListLike):
         t['x'][0] = 100
         assert self.data[0][0] == 100
 
+
 @pytest.mark.usefixtures('table_type')
 class TestInitFromNdarrayStruct(BaseInitFromDictLike):
 
@@ -276,6 +277,17 @@ class TestInitFromDict(BaseInitFromDictLike):
 
 
 @pytest.mark.usefixtures('table_type')
+class TestInitFromMapping(BaseInitFromDictLike):
+
+    def _setup(self, table_type):
+        self.data = UserDict([('a', Column([1, 3], name='x')),
+                              ('b', [2, 4]),
+                              ('c', np.array([3, 5], dtype='i8'))])
+        assert isinstance(self.data, Mapping)
+        assert not isinstance(self.data, dict)
+
+
+@pytest.mark.usefixtures('table_type')
 class TestInitFromOrderedDict(BaseInitFromDictLike):
 
     def _setup(self, table_type):
@@ -314,6 +326,7 @@ class TestInitFromRow(BaseInitFromDictLike):
         assert np.all(t['x'] == np.array([8]))
         assert np.all(self.data['x'] == np.array([1, 3]))
         assert self.data.meta['comments'][1] == 'comment2'
+
 
 @pytest.mark.usefixtures('table_type')
 class TestInitFromTable(BaseInitFromDictLike):
@@ -441,6 +454,7 @@ class TestInitFromRows():
         with pytest.raises(ValueError) as err:
             table_type(data=[[1]], rows=[[1]])
         assert "Cannot supply both `data` and `rows` values" in str(err)
+
 
 @pytest.mark.usefixtures('table_type')
 def test_init_and_ref_from_multidim_ndarray(table_type):

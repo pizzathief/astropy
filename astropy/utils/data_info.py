@@ -14,29 +14,54 @@ table column attributes such as name, format, dtype, meta, and description.
 # tests via their use in providing mixin column info, and in
 # astropy/tests/test_info for providing table and column info summary data.
 
-from __future__ import absolute_import, division, print_function
 
 import os
+import re
 import sys
 import weakref
-from copy import deepcopy
-import numpy as np
-from functools import partial
 import warnings
-import re
+from io import StringIO
+from copy import deepcopy
+from functools import partial
+from collections import OrderedDict
+from contextlib import contextmanager
 
-from ..extern import six
-from ..utils import OrderedDict
-from ..utils.compat import NUMPY_LT_1_8
+import numpy as np
+
+from . import metadata
+
+
+__all__ = ['data_info_factory', 'dtype_info_name', 'BaseColumnInfo',
+           'DataInfo', 'MixinInfo', 'ParentDtypeInfo']
 
 # Tuple of filterwarnings kwargs to ignore when calling info
-IGNORE_WARNINGS = (dict(category=RuntimeWarning,
-                        module=r'numpy\.lib\.nanfunctions'),)
+IGNORE_WARNINGS = (dict(category=RuntimeWarning, message='All-NaN|'
+                        'Mean of empty slice|Degrees of freedom <= 0'),)
 
 STRING_TYPE_NAMES = {(False, 'S'): 'str',  # not PY3
                      (False, 'U'): 'unicode',
-                     (True, 'S'): 'bytes', # PY3
+                     (True, 'S'): 'bytes',  # PY3
                      (True, 'U'): 'str'}
+
+
+@contextmanager
+def serialize_context_as(context):
+    """Set context for serialization.
+
+    This will allow downstream code to understand the context in which a column
+    is being serialized.  Objects like Time or SkyCoord will have different
+    default serialization representations depending on context.
+
+    Parameters
+    ----------
+    context : str
+        Context name, e.g. 'fits', 'hdf5', 'ecsv', 'yaml'
+    """
+    old_context = BaseColumnInfo._serialize_context
+    BaseColumnInfo._serialize_context = context
+    yield
+    BaseColumnInfo._serialize_context = old_context
+
 
 def dtype_info_name(dtype):
     """Return a human-oriented string name of the ``dtype`` arg.
@@ -52,28 +77,28 @@ def dtype_info_name(dtype):
     type that matches the dtype::
 
       Numpy          S<N>      U<N>
-      Python 2      str<N>  unicode<N>
-      Python 3    bytes<N>   str<N>
+      Python      bytes<N>   str<N>
 
     Parameters
     ----------
-    dtype: str, np.dtype, type
+    dtype : str, np.dtype, type
         Input dtype as an object that can be converted via np.dtype()
 
     Returns
     -------
-    dtype_info_name: str
+    dtype_info_name : str
         String name of ``dtype``
     """
     dtype = np.dtype(dtype)
     if dtype.kind in ('S', 'U'):
         length = re.search(r'(\d+)', dtype.str).group(1)
-        type_name = STRING_TYPE_NAMES[(six.PY3, dtype.kind)]
+        type_name = STRING_TYPE_NAMES[(True, dtype.kind)]
         out = type_name + length
     else:
         out = dtype.name
 
     return out
+
 
 def data_info_factory(names, funcs):
     """
@@ -96,31 +121,48 @@ def data_info_factory(names, funcs):
 
     Parameters
     ----------
-    names: list
+    names : list
         List of information attribute names
-    funcs: list
+    funcs : list
         List of functions that compute the corresponding information attribute
 
     Returns
     -------
-    func: function
+    func : function
         Function that can be used as a data info option
     """
     def func(dat):
         outs = []
         for name, func in zip(names, funcs):
             try:
-                if isinstance(func, six.string_types):
+                if isinstance(func, str):
                     out = getattr(dat, func)()
                 else:
                     out = func(dat)
-            except:
+            except Exception:
                 outs.append('--')
             else:
                 outs.append(str(out))
 
         return OrderedDict(zip(names, outs))
     return func
+
+
+def _get_obj_attrs_map(obj, attrs):
+    """
+    Get the values for object ``attrs`` and return as a dict.  This
+    ignores any attributes that are None and in Py2 converts any unicode
+    attribute names or values to str.  In the context of serializing the
+    supported core astropy classes this conversion will succeed and results
+    in more succinct and less python-specific YAML.
+    """
+    out = {}
+    for attr in attrs:
+        val = getattr(obj, attr, None)
+
+        if val is not None:
+            out[attr] = val
+    return out
 
 
 def _get_data_attribute(dat, attr=None):
@@ -141,7 +183,7 @@ def _get_data_attribute(dat, attr=None):
     return str(val)
 
 
-class DataInfo(object):
+class DataInfo:
     """
     Descriptor that data classes use to add an ``info`` attribute for storing
     data attributes in a uniform and portable way.  Note that it *must* be
@@ -154,16 +196,17 @@ class DataInfo(object):
 
     Parameters
     ----------
-    bound : bool, default=False
+    bound : bool
         If True this is a descriptor attribute in a class definition, else it
-        is a DataInfo() object that is bound to a data object instance.
+        is a DataInfo() object that is bound to a data object instance. Default is False.
     """
     _stats = ['mean', 'std', 'min', 'max']
     attrs_from_parent = set()
     attr_names = set(['name', 'unit', 'dtype', 'format', 'description', 'meta'])
     _attrs_no_copy = set()
     _info_summary_attrs = ('dtype', 'shape', 'unit', 'format', 'description', 'class')
-    _parent = None
+    _represent_as_dict_attrs = ()
+    _parent_ref = None
 
     def __init__(self, bound=False):
         # If bound to a data object instance then create the dict of attributes
@@ -171,10 +214,37 @@ class DataInfo(object):
         if bound:
             self._attrs = dict((attr, None) for attr in self.attr_names)
 
+    @property
+    def _parent(self):
+        if self._parent_ref is None:
+            return None
+        else:
+            parent = self._parent_ref()
+            if parent is not None:
+                return parent
+
+            else:
+                raise AttributeError("""\
+failed access "info" attribute on a temporary object.
+
+It looks like you have done something like ``col[3:5].info``, i.e.
+you accessed ``info`` from a temporary slice object ``col[3:5]`` that
+only exists momentarily.  This has failed because the reference to
+that temporary object is now lost.  Instead force a permanent
+reference with ``c = col[3:5]`` followed by ``c.info``.""")
+
+    @_parent.setter
+    def _parent(self, value):
+        if value is None:
+            self._parent_ref = None
+        else:
+            self._parent_ref = weakref.ref(value)
+
     def __get__(self, instance, owner_cls):
         if instance is None:
             # This is an unbound descriptor on the class
             info = self
+            info._parent_cls = owner_cls
         else:
             info = instance.__dict__.get('info')
             if info is None:
@@ -203,7 +273,7 @@ class DataInfo(object):
 
     def __getattr__(self, attr):
         if attr.startswith('_'):
-            return super(DataInfo, self).__getattribute__(attr)
+            return super().__getattribute__(attr)
 
         if attr in self.attrs_from_parent:
             return getattr(self._parent, attr)
@@ -211,7 +281,7 @@ class DataInfo(object):
         try:
             value = self._attrs[attr]
         except KeyError:
-            super(DataInfo, self).__getattribute__(attr)  # Generate AttributeError
+            super().__getattribute__(attr)  # Generate AttributeError
 
         # Weak ref for parent table
         if attr == 'parent_table' and callable(value):
@@ -242,7 +312,7 @@ class DataInfo(object):
 
         # Private attr names get directly set
         if attr.startswith('_'):
-            super(DataInfo, self).__setattr__(attr, value)
+            super().__setattr__(attr, value)
             return
 
         # Finally this must be an actual data attribute that this class is handling.
@@ -254,6 +324,13 @@ class DataInfo(object):
 
         self._attrs[attr] = value
 
+    def _represent_as_dict(self):
+        """Get the values for the parent ``attrs`` and return as a dict."""
+        return _get_obj_attrs_map(self._parent, self._represent_as_dict_attrs)
+
+    def _construct_from_dict(self, map):
+        return self._parent_cls(**map)
+
     info_summary_attributes = staticmethod(
         data_info_factory(names=_info_summary_attrs,
                           funcs=[partial(_get_data_attribute, attr=attr)
@@ -262,7 +339,7 @@ class DataInfo(object):
     # No nan* methods in numpy < 1.8
     info_summary_stats = staticmethod(
         data_info_factory(names=_stats,
-                          funcs=[getattr(np, ('' if NUMPY_LT_1_8 else 'nan') + stat)
+                          funcs=[getattr(np, 'nan' + stat)
                                  for stat in _stats]))
 
     def __call__(self, option='attributes', out=''):
@@ -270,7 +347,7 @@ class DataInfo(object):
         Write summary information about data object to the ``out`` filehandle.
         By default this prints to standard output via sys.stdout.
 
-        The ``option` argument specifies what type of information
+        The ``option`` argument specifies what type of information
         to include.  This can be a string, a function, or a list of
         strings or functions.  Built-in options are:
 
@@ -309,15 +386,15 @@ class DataInfo(object):
 
         Parameters
         ----------
-        option: str, function, list of (str or function)
-            Info option (default='attributes')
-        out: file-like object, None
-            Output destination (default=sys.stdout).  If None then the
+        option : str, function, list of (str or function)
+            Info option, defaults to 'attributes'.
+        out : file-like object, None
+            Output destination, defaults to sys.stdout.  If None then the
             OrderedDict with information attributes is returned
 
         Returns
         -------
-        info: OrderedDict if out==None else None
+        info : OrderedDict if out==None else None
         """
         if out == '':
             out = sys.stdout
@@ -330,7 +407,7 @@ class DataInfo(object):
 
         options = option if isinstance(option, (list, tuple)) else [option]
         for option in options:
-            if isinstance(option, six.string_types):
+            if isinstance(option, str):
                 if hasattr(self, 'info_summary_' + option):
                     option = getattr(self, 'info_summary_' + option)
                 else:
@@ -347,7 +424,7 @@ class DataInfo(object):
         else:
             try:
                 n_bad = np.count_nonzero(np.isinf(dat) | np.isnan(dat))
-            except:
+            except Exception:
                 n_bad = 0
         info['n_bad'] = n_bad
 
@@ -365,9 +442,9 @@ class DataInfo(object):
 
     def __repr__(self):
         if self._parent is None:
-            return super(DataInfo, self).__repr__()
+            return super().__repr__()
 
-        out = six.moves.cStringIO()
+        out = StringIO()
         self.__call__(out=out)
         return out.getvalue()
 
@@ -385,6 +462,22 @@ class BaseColumnInfo(DataInfo):
     """
     attr_names = DataInfo.attr_names.union(['parent_table', 'indices'])
     _attrs_no_copy = set(['parent_table'])
+
+    # Context for serialization.  This can be set temporarily via
+    # ``serialize_context_as(context)`` context manager to allow downstream
+    # code to understand the context in which a column is being serialized.
+    # Typical values are 'fits', 'hdf5', 'ecsv', 'yaml'.  Objects like Time or
+    # SkyCoord will have different default serialization representations
+    # depending on context.
+    _serialize_context = None
+
+    def __init__(self, bound=False):
+        super().__init__(bound=bound)
+
+        # If bound to a data object instance then add a _format_funcs dict
+        # for caching functions for print formatting.
+        if bound:
+            self._format_funcs = {}
 
     def iter_str_vals(self):
         """
@@ -426,10 +519,10 @@ class BaseColumnInfo(DataInfo):
         elif isinstance(index, np.ndarray) and index.dtype.kind == 'b':
             # boolean mask
             keys = np.where(index)[0]
-        else: # single int
+        else:  # single int
             keys = [index]
 
-        value = np.atleast_1d(value) # turn array(x) into array([x])
+        value = np.atleast_1d(value)  # turn array(x) into array([x])
         if value.size == 1:
             # repeat single value
             value = list(value) * len(keys)
@@ -452,7 +545,6 @@ class BaseColumnInfo(DataInfo):
         col_len : int
             Length of original object
         '''
-        from ..table.index import Index
         from ..table.sorted_array import SortedArray
         if not getattr(self, '_copy_indices', True):
             # Necessary because MaskedArray will perform a shallow copy
@@ -481,9 +573,74 @@ class BaseColumnInfo(DataInfo):
 
         return col_slice
 
+    @staticmethod
+    def merge_cols_attributes(cols, metadata_conflicts, name, attrs):
+        """
+        Utility method to merge and validate the attributes ``attrs`` for the
+        input table columns ``cols``.
+
+        Note that ``dtype`` and ``shape`` attributes are handled specially.
+        These should not be passed in ``attrs`` but will always be in the
+        returned dict of merged attributes.
+
+        Parameters
+        ----------
+        cols : list
+            List of input Table column objects
+        metadata_conflicts : str ('warn'|'error'|'silent')
+            How to handle metadata conflicts
+        name : str
+            Output column name
+        attrs : list
+            List of attribute names to be merged
+
+        Returns
+        -------
+        attrs : dict of merged attributes
+
+        """
+        from ..table.np_utils import TableMergeError
+
+        def warn_str_func(key, left, right):
+            out = ("In merged column '{}' the '{}' attribute does not match "
+                   "({} != {}).  Using {} for merged output"
+                   .format(name, key, left, right, right))
+            return out
+
+        def getattrs(col):
+            return {attr: getattr(col.info, attr) for attr in attrs
+                    if getattr(col.info, attr, None) is not None}
+
+        out = getattrs(cols[0])
+        for col in cols[1:]:
+            out = metadata.merge(out, getattrs(col), metadata_conflicts=metadata_conflicts,
+                                 warn_str_func=warn_str_func)
+
+        # Output dtype is the superset of all dtypes in in_cols
+        out['dtype'] = metadata.common_dtype(cols)
+
+        # Make sure all input shapes are the same
+        uniq_shapes = set(col.shape[1:] for col in cols)
+        if len(uniq_shapes) != 1:
+            raise TableMergeError('columns have different shapes')
+        out['shape'] = uniq_shapes.pop()
+
+        return out
+
 
 class MixinInfo(BaseColumnInfo):
-    pass
+
+    def __setattr__(self, attr, value):
+        # For mixin columns that live within a table, rename the column in the
+        # table when setting the name attribute.  This mirrors the same
+        # functionality in the BaseColumn class.
+        if attr == 'name' and self.parent_table is not None:
+            from ..table.np_utils import fix_column_name
+            new_name = fix_column_name(value)  # Ensure col name is numpy compatible
+            self.parent_table.columns._rename_column(self.name, new_name)
+
+        super().__setattr__(attr, value)
+
 
 class ParentDtypeInfo(MixinInfo):
     """Mixin that gets info.dtype from parent"""

@@ -1,14 +1,14 @@
+# This Python file uses the following encoding: utf-8
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-# TEST_UNICODE_LITERALS
 
+import pytest
 import numpy as np
 
-from ...tests.helper import pytest
 from ... import table
-from ...table import Table
+from ...table import Table, QTable
 from ...table.table_helpers import simple_table
-from ...extern.six import PY3
+from ... import units as u
 from ...utils import console
 
 BIG_WIDE_ARR = np.arange(2000, dtype=np.float64).reshape(100, 20)
@@ -39,9 +39,10 @@ class TestMultiD():
                          '<tr><td>1 .. 2</td><td>3 .. 4</td><td>5 .. 6</td></tr>',
                          '<tr><td>10 .. 20</td><td>30 .. 40</td><td>50 .. 60</td></tr>',
                          '</table>']
+        nbclass = table.conf.default_notebook_table_class
         assert t._repr_html_().splitlines() == [
-            '&lt;{0} masked={1} length=2&gt;'.format(table_type.__name__, t.masked),
-            '<table id="table{tid}">'.format(tid=id(t)),
+            '<i>{0} masked={1} length=2</i>'.format(table_type.__name__, t.masked),
+            '<table id="table{id}" class="{nbclass}">'.format(id=id(t), nbclass=nbclass),
             '<thead><tr><th>col0 [2]</th><th>col1 [2]</th><th>col2 [2]</th></tr></thead>',
             '<thead><tr><th>int64</th><th>int64</th><th>int64</th></tr></thead>',
             '<tr><td>1 .. 2</td><td>3 .. 4</td><td>5 .. 6</td></tr>',
@@ -77,9 +78,10 @@ class TestMultiD():
                          '<tr><td>1</td><td>3</td><td>5</td></tr>',
                          '<tr><td>10</td><td>30</td><td>50</td></tr>',
                          '</table>']
+        nbclass = table.conf.default_notebook_table_class
         assert t._repr_html_().splitlines() == [
-            '&lt;{0} masked={1} length=2&gt;'.format(table_type.__name__, t.masked),
-            '<table id="table{id}">'.format(id=id(t)),
+            '<i>{0} masked={1} length=2</i>'.format(table_type.__name__, t.masked),
+            '<table id="table{id}" class="{nbclass}">'.format(id=id(t), nbclass=nbclass),
             '<thead><tr><th>col0 [1,1]</th><th>col1 [1,1]</th><th>col2 [1,1]</th></tr></thead>',
             '<thead><tr><th>int64</th><th>int64</th><th>int64</th></tr></thead>',
             '<tr><td>1</td><td>3</td><td>5</td></tr>', u'<tr><td>10</td><td>30</td><td>50</td></tr>',
@@ -96,15 +98,17 @@ class TestMultiD():
 
 def test_html_escaping():
     t = table.Table([(str('<script>alert("gotcha");</script>'), 2, 3)])
+    nbclass = table.conf.default_notebook_table_class
     assert t._repr_html_().splitlines() == [
-        '&lt;Table length=3&gt;',
-        '<table id="table{id}">'.format(id=id(t)),
+        '<i>Table length=3</i>',
+        '<table id="table{id}" class="{nbclass}">'.format(id=id(t), nbclass=nbclass),
         '<thead><tr><th>col0</th></tr></thead>',
         '<thead><tr><th>str33</th></tr></thead>',
         '<tr><td>&lt;script&gt;alert(&quot;gotcha&quot;);&lt;/script&gt;</td></tr>',
         '<tr><td>2</td></tr>',
         '<tr><td>3</td></tr>',
         '</table>']
+
 
 @pytest.mark.usefixtures('table_type')
 class TestPprint():
@@ -136,8 +140,7 @@ class TestPprint():
         nlines, width = console.terminal_size()
         assert len(lines) == nlines
         for line in lines[:-1]:  # skip last "Length = .. rows" line
-            assert (len(line) > width - 10 and
-                    len(line) <= width)
+            assert width - 10 < len(line) <= width
 
     def test_format1(self, table_type):
         """Basic test of formatting, unit header row included"""
@@ -233,7 +236,6 @@ class TestPprint():
                          '   15    16    17',
                          'Length = 6 rows']
 
-
     def test_clip3(self, table_type):
         """Max lines below hard limit of 8 and max width below hard limit
         of 10
@@ -255,7 +257,6 @@ class TestPprint():
         for max_lines in (0, 1, 4, 5, 6, 7, 8, 100, 101, 102, 103, 104, 130):
             lines = self.tb.pformat(max_lines=max_lines, show_unit=False)
             assert len(lines) == max(8, min(102, max_lines))
-
 
 
 @pytest.mark.usefixtures('table_type')
@@ -287,9 +288,9 @@ class TestFormat():
         assert str(t['a']) == '   a   \n-------\n%4.2f 1\n%4.2f 2'
 
         #  Invalid format spec
-        t['a'].format = 'fail'
         with pytest.raises(ValueError):
-            str(t['a'])
+            t['a'].format = 'fail'
+        assert t['a'].format == '%4.2f {0:}'  # format did not change
 
     def test_column_format_with_threshold(self, table_type):
         from ... import conf
@@ -334,7 +335,7 @@ class TestFormat():
         t = table_type([[1., 2.], [3, 4]], names=('a', 'b'))
 
         # mathematical function
-        class format(object):
+        class format:
             def __call__(self, x):
                 return str(x * 3.)
         t['a'].format = format()
@@ -348,9 +349,8 @@ class TestFormat():
         def func(a, b):
             pass
 
-        t['a'].format = func
         with pytest.raises(ValueError):
-            str(t['a'])
+            t['a'].format = func
 
     def test_column_format_func_multiD(self, table_type):
         arr = [np.array([[1, 2],
@@ -367,9 +367,8 @@ class TestFormat():
         t = table_type([[1., 2.], [3, 4]], names=('a', 'b'))
 
         # mathematical function
-        t['a'].format = lambda x: x * 3
         with pytest.raises(ValueError):
-            str(t['a'])
+            t['a'].format = lambda x: x * 3
 
     def test_column_alignment(self, table_type):
         t = table_type([[1], [2], [3], [4]],
@@ -458,6 +457,7 @@ class TestFormatWithMaskedElements():
         t = Table([[1., 2., 3.], [3, 4, 5]], names=('a', 'b'), masked=True)
         t['a'].mask = [True, False, True]
         # mathematical function
+
         def format_func(x):
             if x is np.ma.masked:
                 return '!!'
@@ -476,7 +476,7 @@ class TestFormatWithMaskedElements():
         t['a'].mask = [True, False, True]
 
         # mathematical function
-        class format(object):
+        class format:
             def __call__(self, x):
                 return str(x * 3.)
         t['a'].format = format()
@@ -491,9 +491,8 @@ class TestFormatWithMaskedElements():
         def func(a, b):
             pass
 
-        t['a'].format = func
         with pytest.raises(ValueError):
-            str(t['a'])
+            t['a'].format = func
 
         # but if all are masked, it never gets called
         t['a'].mask = [True, True]
@@ -525,13 +524,14 @@ def test_pprint_npfloat32():
 
 def test_pprint_py3_bytes():
     """
-    Test for #1346.  Make sure a bytestring (dtype=S<N>) in Python 3 is printed
-    correctly (without the "b" prefix like b'string').
+    Test for #1346 and #4944. Make sure a bytestring (dtype=S<N>) in Python 3
+    is printed correctly (without the "b" prefix like b'string').
     """
-    val = bytes('val', encoding='utf-8') if PY3 else 'val'
-    dat = np.array([(val,)], dtype=[(str('col'), 'S3')])
+    val = bytes('val', encoding='utf-8')
+    blah = u'bläh'.encode('utf-8')
+    dat = np.array([val, blah], dtype=[(str('col'), 'S10')])
     t = table.Table(dat)
-    assert t['col'].pformat() == ['col', '---', 'val']
+    assert t['col'].pformat() == ['col ', '----', ' val', u'bläh']
 
 
 def test_pprint_nameless_col():
@@ -569,6 +569,7 @@ def test_html():
         u'<tr><td>1.0</td></tr>',
         u'<tr><td>2.0</td></tr>',
         u'</table>']
+
 
 def test_align():
     t = simple_table(2, kinds='iS')
@@ -633,7 +634,7 @@ def test_align():
                             '##1.00#       1',
                             '##2.00#       2']
 
-    assert t1.pformat(align='!<') ==  ['column1 column2',
+    assert t1.pformat(align='!<') == ['column1 column2',
                                        '------- -------',
                                        '1.00!!! 1!!!!!!',
                                        '2.00!!! 2!!!!!!']
@@ -667,3 +668,23 @@ def test_align():
 
     with pytest.raises(ValueError):
         t.pprint(align='x=')
+
+
+def test_auto_format_func():
+    """Test for #5802 (fix for #5800 where format_func key is not unique)"""
+    t = Table([[1, 2] * u.m])
+    t['col0'].format = '%f'
+    t.pformat()  # Force caching of format function
+
+    qt = QTable(t)
+    qt.pformat()  # Generates exception prior to #5802
+
+
+def test_decode_replace():
+    """
+    Test printing a bytestring column with a value that fails
+    decoding to utf-8 and gets replaced by U+FFFD.  See
+    https://docs.python.org/3/library/codecs.html#codecs.replace_errors
+    """
+    t = Table([[b'Z\xf0']])
+    assert t.pformat() == [u'col0', u'----', u'  Z\ufffd']

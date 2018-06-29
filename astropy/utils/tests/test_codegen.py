@@ -1,12 +1,11 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 import sys
 import traceback
 
+import pytest
+
 from ..codegen import make_function_with_signature
-from ...tests.helper import pytest
 
 
 def test_make_function_with_signature_lineno():
@@ -29,7 +28,7 @@ def test_make_function_with_signature_lineno():
 
     try:
         wrapped(1, 2)
-    except:
+    except Exception:
         exc_cls, exc, tb = sys.exc_info()
         assert exc_cls is ZeroDivisionError
         # The *last* line in the traceback should be the 1 / 0 line in

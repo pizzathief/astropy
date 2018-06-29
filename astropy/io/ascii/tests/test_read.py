@@ -1,42 +1,54 @@
+# -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-# TEST_UNICODE_LITERALS
 
 import re
+from io import BytesIO, open
+from collections import OrderedDict
+import locale
+import platform
+from io import StringIO
 
+import pathlib
+import pytest
 import numpy as np
 
-from ....extern import six
-from ....extern.six.moves import cStringIO as StringIO
-from ....utils import OrderedDict
-from ....tests.helper import pytest
 from ... import ascii
 from ....table import Table
+from .... import table
 from ....units import Unit
+from ....table.table_helpers import simple_table
 
 from .common import (raises, assert_equal, assert_almost_equal,
-                     assert_true, setup_function, teardown_function)
+                     assert_true)
 from .. import core
-from ..ui import _probably_html, get_read_trace
+from ..ui import _probably_html, get_read_trace, cparser
+
+# setup/teardown function to have the tests run in the correct directory
+from .common import setup_function, teardown_function
 
 try:
-    import bz2
+    import bz2  # pylint: disable=W0611
 except ImportError:
     HAS_BZ2 = False
 else:
     HAS_BZ2 = True
 
+asciiIO = lambda x: BytesIO(x.encode('ascii'))
 
-@pytest.mark.parametrize('fast_reader', [True, False, 'force'])
+
+@pytest.mark.parametrize('fast_reader', [True, False, {'use_fast_converter': False},
+                                         {'use_fast_converter': True}, 'force'])
 def test_convert_overflow(fast_reader):
     """
     Test reading an extremely large integer, which falls through to
-    string due to an overflow error (#2234).
+    string due to an overflow error (#2234). The C parsers used to
+    return inf (kind 'f') for this.
     """
-    expected_kind = ('S', 'U')
+    expected_kind = 'U'
     dat = ascii.read(['a', '1' * 10000], format='basic',
                      fast_reader=fast_reader, guess=False)
-    assert dat['a'].dtype.kind in expected_kind
+    assert dat['a'].dtype.kind == expected_kind
 
 
 def test_guess_with_names_arg():
@@ -95,29 +107,58 @@ def test_guess_with_format_arg():
     assert dat.colnames == ['a', 'b']
 
 
+def test_guess_with_delimiter_arg():
+    """
+    When the delimiter is explicitly given then do not try others in guessing.
+    """
+    fields = ['10.1E+19', '3.14', '2048', '-23']
+    values = [1.01e20, 3.14, 2048, -23]
+
+    # Default guess should recognise CSV with optional spaces
+    t0 = ascii.read(asciiIO(', '.join(fields)), guess=True)
+    for n, v in zip(t0.colnames, values):
+        assert t0[n][0] == v
+
+    # Forcing space as delimiter produces type str columns ('10.1E+19,')
+    t1 = ascii.read(asciiIO(', '.join(fields)), guess=True, delimiter=' ')
+    for n, v in zip(t1.colnames[:-1], fields[:-1]):
+        assert t1[n][0] == v+','
+
+
+def test_reading_mixed_delimiter_tabs_spaces():
+    # Regression test for https://github.com/astropy/astropy/issues/6770
+    dat = ascii.read('1 2\t3\n1 2\t3', format='no_header', names=list('abc'))
+    assert len(dat) == 2
+
+    Table.read(['1 2\t3', '1 2\t3'], format='ascii.no_header',
+               names=['a', 'b', 'c'])
+    assert len(dat) == 2
+
+
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
 def test_read_with_names_arg(fast_reader):
     """
     Test that a bad value of `names` raises an exception.
     """
-    with pytest.raises(ValueError):
-        dat = ascii.read(['c d', 'e f'], names=('a', ), guess=False, fast_reader=fast_reader)
+    # CParser only uses columns in `names` and thus reports mismach in num_col
+    with pytest.raises(ascii.InconsistentTableError):
+        ascii.read(['c d', 'e f'], names=('a', ), guess=False, fast_reader=fast_reader)
 
 
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
 def test_read_all_files(fast_reader):
     for testfile in get_testfiles():
         if testfile.get('skip'):
-            print('\n\n******** SKIPPING %s' % testfile['name'])
+            print('\n\n******** SKIPPING {}'.format(testfile['name']))
             continue
-        print('\n\n******** READING %s' % testfile['name'])
+        print('\n\n******** READING {}'.format(testfile['name']))
         for guess in (True, False):
             test_opts = testfile['opts'].copy()
             if 'guess' not in test_opts:
                 test_opts['guess'] = guess
-            if 'Reader' in test_opts and 'fast_{0}'.format(test_opts['Reader']._format_name) \
-                in core.FAST_CLASSES: # has fast version
-                if 'Inputter' not in test_opts: # fast reader doesn't allow this
+            if ('Reader' in test_opts and 'fast_{0}'.format(test_opts['Reader']._format_name)
+                    in core.FAST_CLASSES):  # has fast version
+                if 'Inputter' not in test_opts:  # fast reader doesn't allow this
                     test_opts['fast_reader'] = fast_reader
             table = ascii.read(testfile['name'], **test_opts)
             assert_equal(table.dtype.names, testfile['cols'])
@@ -129,9 +170,9 @@ def test_read_all_files(fast_reader):
 def test_read_all_files_via_table(fast_reader):
     for testfile in get_testfiles():
         if testfile.get('skip'):
-            print('\n\n******** SKIPPING %s' % testfile['name'])
+            print('\n\n******** SKIPPING {}'.format(testfile['name']))
             continue
-        print('\n\n******** READING %s' % testfile['name'])
+        print('\n\n******** READING {}'.format(testfile['name']))
         for guess in (True, False):
             test_opts = testfile['opts'].copy()
             if 'guess' not in test_opts:
@@ -152,11 +193,11 @@ def test_read_all_files_via_table(fast_reader):
 def test_guess_all_files():
     for testfile in get_testfiles():
         if testfile.get('skip'):
-            print('\n\n******** SKIPPING %s' % testfile['name'])
+            print('\n\n******** SKIPPING {}'.format(testfile['name']))
             continue
         if not testfile['opts'].get('guess', True):
             continue
-        print('\n\n******** READING %s' % testfile['name'])
+        print('\n\n******** READING {}'.format(testfile['name']))
         for filter_read_opts in (['Reader', 'delimiter', 'quotechar'], []):
             # Copy read options except for those in filter_read_opts
             guess_opts = dict((k, v) for k, v in testfile['opts'].items()
@@ -193,7 +234,7 @@ def test_daophot_header_keywords():
     table = ascii.read('t/daophot.dat', Reader=ascii.Daophot)
     expected_keywords = (('NSTARFILE', 'test.nst.1', 'filename', '%-23s'),
                          ('REJFILE', '"hello world"', 'filename', '%-23s'),
-                         ('SCALE', '1.',  'units/pix', '%-23.7g'),)
+                         ('SCALE', '1.', 'units/pix', '%-23.7g'),)
 
     keywords = table.meta['keywords']  # Ordered dict of keyword structures
     for name, value, units, format_ in expected_keywords:
@@ -222,31 +263,31 @@ def test_daophot_multiple_aperture2():
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
 def test_empty_table_no_header(fast_reader):
     with pytest.raises(ascii.InconsistentTableError):
-        table = ascii.read('t/no_data_without_header.dat', Reader=ascii.NoHeader,
-                            guess=False, fast_reader=fast_reader)
+        ascii.read('t/no_data_without_header.dat', Reader=ascii.NoHeader,
+                   guess=False, fast_reader=fast_reader)
 
 
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
 def test_wrong_quote(fast_reader):
     with pytest.raises(ascii.InconsistentTableError):
-        table = ascii.read('t/simple.txt', guess=False, fast_reader=fast_reader)
+        ascii.read('t/simple.txt', guess=False, fast_reader=fast_reader)
 
 
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
 def test_extra_data_col(fast_reader):
     with pytest.raises(ascii.InconsistentTableError):
-        table = ascii.read('t/bad.txt', fast_reader=fast_reader)
+        ascii.read('t/bad.txt', fast_reader=fast_reader)
 
 
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
 def test_extra_data_col2(fast_reader):
     with pytest.raises(ascii.InconsistentTableError):
-        table = ascii.read('t/simple5.txt', delimiter='|', fast_reader=fast_reader)
+        ascii.read('t/simple5.txt', delimiter='|', fast_reader=fast_reader)
 
 
-@raises(IOError)
+@raises(OSError)
 def test_missing_file():
-    table = ascii.read('does_not_exist')
+    ascii.read('does_not_exist')
 
 
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
@@ -262,7 +303,7 @@ def test_set_include_names(fast_reader):
     names = ('c1', 'c2', 'c3', 'c4', 'c5', 'c6')
     include_names = ('c1', 'c3')
     data = ascii.read('t/simple3.txt', names=names, include_names=include_names,
-                           delimiter='|', fast_reader=fast_reader)
+                      delimiter='|', fast_reader=fast_reader)
     assert_equal(data.dtype.names, include_names)
 
 
@@ -340,7 +381,7 @@ def test_set_converters():
                   }
     data = ascii.read('t/test4.dat', converters=converters)
     assert_equal(str(data['zabs1.nh'].dtype), 'float32')
-    assert_equal(data['p1.gamma'][0], '1.26764544642')
+    assert_equal(data['p1.gamma'][0], '1.26764500000')
 
 
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
@@ -408,7 +449,7 @@ def test_fill_values_include_names(fast_reader):
     f = 't/fill_values.txt'
     testfile = get_testfiles(f)
     data = ascii.read(f, fill_values=('a', '1'), fast_reader=fast_reader,
-                           fill_include_names = ['b'], **testfile['opts'])
+                      fill_include_names=['b'], **testfile['opts'])
     check_fill_values(data)
 
 
@@ -417,7 +458,7 @@ def test_fill_values_exclude_names(fast_reader):
     f = 't/fill_values.txt'
     testfile = get_testfiles(f)
     data = ascii.read(f, fill_values=('a', '1'), fast_reader=fast_reader,
-                           fill_exclude_names = ['a'], **testfile['opts'])
+                      fill_exclude_names=['a'], **testfile['opts'])
     check_fill_values(data)
 
 
@@ -483,7 +524,7 @@ def test_Ipac_meta():
 def test_set_guess_kwarg():
     """Read a file using guess with one of the typical guess_kwargs explicitly set."""
     data = ascii.read('t/space_delim_no_header.dat',
-                           delimiter=',', guess=True)
+                      delimiter=',', guess=True)
     assert(data.dtype.names == ('1 3.4 hello',))
     assert(len(data) == 1)
 
@@ -761,13 +802,13 @@ def get_testfiles(name=None):
         {'name': 't/whitespace.dat',
          'cols': ('quoted colname with tab\tinside', 'col2', 'col3'),
          'nrows': 2,
-         'opts': {'delimiter': '\s'}},
+         'opts': {'delimiter': r'\s'}},
         {'name': 't/simple_csv.csv',
-         'cols': ('a','b','c'),
+         'cols': ('a', 'b', 'c'),
          'nrows': 2,
          'opts': {'Reader': ascii.Csv}},
         {'name': 't/simple_csv_missing.csv',
-         'cols': ('a','b','c'),
+         'cols': ('a', 'b', 'c'),
          'nrows': 2,
          'skip': True,
          'opts': {'Reader': ascii.Csv}},
@@ -779,6 +820,10 @@ def get_testfiles(name=None):
          'name': 't/latex2.tex',
          'nrows': 3,
          'opts': {'Reader': ascii.AASTex}},
+        {'cols': ('cola', 'colb', 'colc'),
+         'name': 't/latex3.tex',
+         'nrows': 2,
+         'opts': {'Reader': ascii.Latex}},
         {'cols': ('Col1', 'Col2', 'Col3', 'Col4'),
          'name': 't/fixed_width_2_line.txt',
          'nrows': 2,
@@ -786,7 +831,7 @@ def get_testfiles(name=None):
     ]
 
     try:
-        import bs4
+        import bs4  # pylint: disable=W0611
         testfiles.append({'cols': ('Column 1', 'Column 2', 'Column 3'),
                           'name': 't/html.html',
                           'nrows': 3,
@@ -799,6 +844,7 @@ def get_testfiles(name=None):
     else:
         return testfiles
 
+
 def test_header_start_exception():
     '''Check certain Readers throw an exception if ``header_start`` is set
 
@@ -807,7 +853,8 @@ def test_header_start_exception():
     This was implemented in response to issue #885.
     '''
     for readerclass in [ascii.NoHeader, ascii.SExtractor, ascii.Ipac,
-                   ascii.BaseReader, ascii.FixedWidthNoHeader, ascii.Cds, ascii.Daophot]:
+                        ascii.BaseReader, ascii.FixedWidthNoHeader,
+                        ascii.Cds, ascii.Daophot]:
         with pytest.raises(ValueError):
             reader = ascii.core._get_reader(readerclass, header_start=5)
 
@@ -823,6 +870,7 @@ def test_csv_table_read():
     t = ascii.read(lines)
     assert t.colnames == ['a', 'b']
 
+
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
 def test_overlapping_names(fast_reader):
     """
@@ -832,14 +880,15 @@ def test_overlapping_names(fast_reader):
     t = ascii.read(['a b', '1 2'], names=['b', 'a'], fast_reader=fast_reader)
     assert t.colnames == ['b', 'a']
 
+
 def test_sextractor_units():
     """
     Make sure that the SExtractor reader correctly inputs descriptions and units.
     """
     table = ascii.read('t/sextractor2.dat', Reader=ascii.SExtractor, guess=False)
     expected_units = [None, Unit('pix'), Unit('pix'), Unit('mag'),
-                Unit('mag'), None, Unit('pix**2'), Unit('m**(-6)'),
-                Unit('mag * arcsec**(-2)')]
+                      Unit('mag'), None, Unit('pix**2'), Unit('m**(-6)'),
+                      Unit('mag * arcsec**(-2)')]
     expected_descrs = ['Running object number',
                        'Windowed position estimate along x',
                        'Windowed position estimate along y',
@@ -853,6 +902,33 @@ def test_sextractor_units():
         assert table[colname].unit == expected_units[i]
         assert table[colname].description == expected_descrs[i]
 
+
+def test_sextractor_last_column_array():
+    """
+    Make sure that the SExtractor reader handles the last column correctly when it is array-like.
+    """
+    table = ascii.read('t/sextractor3.dat', Reader=ascii.SExtractor, guess=False)
+    expected_columns = ['X_IMAGE', 'Y_IMAGE', 'ALPHA_J2000', 'DELTA_J2000',
+                        'MAG_AUTO', 'MAGERR_AUTO',
+                        'MAG_APER', 'MAG_APER_1', 'MAG_APER_2', 'MAG_APER_3', 'MAG_APER_4', 'MAG_APER_5', 'MAG_APER_6',
+                        'MAGERR_APER', 'MAGERR_APER_1', 'MAGERR_APER_2', 'MAGERR_APER_3', 'MAGERR_APER_4', 'MAGERR_APER_5', 'MAGERR_APER_6']
+    expected_units = [Unit('pix'), Unit('pix'), Unit('deg'), Unit('deg'),
+                      Unit('mag'), Unit('mag'),
+                      Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'),
+                      Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag')]
+    expected_descrs = ['Object position along x', None,
+                       'Right ascension of barycenter (J2000)',
+                       'Declination of barycenter (J2000)',
+                       'Kron-like elliptical aperture magnitude',
+                       'RMS error for AUTO magnitude', ] + [
+                       'Fixed aperture magnitude vector'] * 7 + [
+                       'RMS error vector for fixed aperture mag.'] * 7
+    for i, colname in enumerate(table.colnames):
+        assert table[colname].name == expected_columns[i]
+        assert table[colname].unit == expected_units[i]
+        assert table[colname].description == expected_descrs[i]
+
+
 def test_list_with_newlines():
     """
     Check that lists of strings where some strings consist of just a newline
@@ -864,6 +940,7 @@ def test_list_with_newlines():
     assert t[0][0] == 123
     assert t[1][0] == 456
 
+
 def test_commented_csv():
     """
     Check that Csv reader does not have ignore lines with the # comment
@@ -874,6 +951,7 @@ def test_commented_csv():
     assert len(t) == 2
     assert t['#a'][1] == '#3'
 
+
 def test_meta_comments():
     """
     Make sure that line comments are included in the ``meta`` attribute
@@ -882,6 +960,7 @@ def test_meta_comments():
     t = ascii.read(['#comment1', '#   comment2 \t', 'a,b,c', '1,2,3'])
     assert t.colnames == ['a', 'b', 'c']
     assert t.meta['comments'] == ['comment1', 'comment2']
+
 
 def test_guess_fail():
     """
@@ -908,7 +987,7 @@ def test_guessing_file_object():
     Test guessing a file object.  Fixes #3013 and similar issue noted in #3019.
     """
     t = ascii.read(open('t/ipac.dat.bz2', 'rb'))
-    assert t.colnames == ['ra','dec','sai','v2','sptype']
+    assert t.colnames == ['ra', 'dec', 'sai', 'v2', 'sptype']
 
 
 def test_pformat_roundtrip():
@@ -955,29 +1034,51 @@ def test_almost_but_not_quite_daophot():
     assert len(dat) == 3
 
 
-@pytest.mark.parametrize('fast', [True, False])
+@pytest.mark.parametrize('fast', [False, 'force'])
 def test_commented_header_comments(fast):
     """
-    Test that comments in commented_header are as expected and that the
-    table round-trips.
+    Test that comments in commented_header are as expected with header_start
+    at different positions, and that the table round-trips.
     """
+    comments = ['comment 1', 'comment 2', 'comment 3']
     lines = ['# a b',
              '# comment 1',
              '# comment 2',
+             '# comment 3',
              '1 2',
              '3 4']
     dat = ascii.read(lines, format='commented_header', fast_reader=fast)
-    assert dat.meta['comments'] == ['comment 1', 'comment 2']
+    assert dat.meta['comments'] == comments
+    assert dat.colnames == ['a', 'b']
 
     out = StringIO()
     ascii.write(dat, out, format='commented_header', fast_writer=fast)
     assert out.getvalue().splitlines() == lines
+
+    lines.insert(1, lines.pop(0))
+    dat = ascii.read(lines, format='commented_header', header_start=1, fast_reader=fast)
+    assert dat.meta['comments'] == comments
+    assert dat.colnames == ['a', 'b']
+
+    lines.insert(2, lines.pop(1))
+    dat = ascii.read(lines, format='commented_header', header_start=2, fast_reader=fast)
+    assert dat.meta['comments'] == comments
+    assert dat.colnames == ['a', 'b']
+    dat = ascii.read(lines, format='commented_header', header_start=-2, fast_reader=fast)
+    assert dat.meta['comments'] == comments
+    assert dat.colnames == ['a', 'b']
+
+    lines.insert(3, lines.pop(2))
+    dat = ascii.read(lines, format='commented_header', header_start=-1, fast_reader=fast)
+    assert dat.meta['comments'] == comments
+    assert dat.colnames == ['a', 'b']
 
     lines = ['# a b',
              '1 2',
              '3 4']
     dat = ascii.read(lines, format='commented_header', fast_reader=fast)
     assert 'comments' not in dat.meta
+    assert dat.colnames == ['a', 'b']
 
 
 def test_probably_html():
@@ -992,9 +1093,9 @@ def test_probably_html():
                   'file://blah.com/table.htm',
                   ' <! doctype html > hello world',
                   'junk < table baz> <tr foo > <td bar> </td> </tr> </table> junk',
-                  ['junk < table baz>', ' <tr foo >', ' <td bar> ', '</td> </tr>',  '</table> junk'],
+                  ['junk < table baz>', ' <tr foo >', ' <td bar> ', '</td> </tr>', '</table> junk'],
                   (' <! doctype html > ', ' hello world'),
-    ):
+                   ):
         assert _probably_html(table) is True
 
     for table in ('t/html.htms',
@@ -1003,10 +1104,10 @@ def test_probably_html():
                   'fole://blah/table.htm',
                   ' < doctype html > hello world',
                   'junk < tble baz> <tr foo > <td bar> </td> </tr> </table> junk',
-                  ['junk < table baz>', ' <t foo >', ' <td bar> ', '</td> </tr>',  '</table> junk'],
+                  ['junk < table baz>', ' <t foo >', ' <td bar> ', '</td> </tr>', '</table> junk'],
                   (' <! doctype htm > ', ' hello world'),
                   [[1, 2, 3]],
-    ):
+                   ):
         assert _probably_html(table) is False
 
 
@@ -1020,8 +1121,8 @@ def test_data_header_start(fast_reader):
                '1 2'],  # line 2
               [{'header_start': 1},
                {'header_start': 1, 'data_start': 2}
-           ]
-           ),
+               ]
+               ),
 
              (['# comment',
                '',
@@ -1063,24 +1164,18 @@ def test_table_with_no_newline():
     Test that an input file which is completely empty fails in the expected way.
     Test that an input file with one line but no newline succeeds.
     """
-    if six.PY3:
-        import io
-        _StringIO = io.BytesIO
-    else:
-        _StringIO = StringIO
-
     # With guessing
-    table = _StringIO()
+    table = BytesIO()
     with pytest.raises(ascii.InconsistentTableError):
         ascii.read(table)
 
     # Without guessing
-    table = _StringIO()
+    table = BytesIO()
     with pytest.raises(ValueError) as err:
         ascii.read(table, guess=False, fast_reader=False, format='basic')
     assert 'No header line found' in str(err.value)
 
-    table = _StringIO()
+    table = BytesIO()
     with pytest.raises(ValueError) as err:
         ascii.read(table, guess=False, fast_reader=True, format='fast_basic')
     assert 'Inconsistent data column lengths' in str(err.value)
@@ -1089,8 +1184,263 @@ def test_table_with_no_newline():
     for kwargs in [dict(),
                    dict(guess=False, fast_reader=False, format='basic'),
                    dict(guess=False, fast_reader=True, format='fast_basic')]:
-        table = _StringIO()
+        table = BytesIO()
         table.write(b'a b')
         t = ascii.read(table, **kwargs)
         assert t.colnames == ['a', 'b']
         assert len(t) == 0
+
+
+def test_path_object():
+    fpath = pathlib.Path('t/simple.txt')
+    data = ascii.read(fpath)
+
+    assert len(data) == 2
+    assert sorted(list(data.columns)) == ['test 1a', 'test2', 'test3', 'test4']
+    assert data['test2'][1] == 'hat2'
+
+
+def test_column_conversion_error():
+    """
+    Test that context information (upstream exception message) from column
+    conversion error is provided.
+    """
+    ipac = """\
+| col0   |
+| double |
+ 1  2
+"""
+    with pytest.raises(ValueError) as err:
+        ascii.read(ipac, guess=False, format='ipac')
+    assert 'Column col0 failed to convert:' in str(err.value)
+
+    with pytest.raises(ValueError) as err:
+        ascii.read(['a b', '1 2'], guess=False, format='basic', converters={'a': []})
+    assert 'no converters' in str(err.value)
+
+
+def test_non_C_locale_with_fast_reader():
+    """Test code that forces "C" locale while calling fast reader (#4364)"""
+    current = locale.setlocale(locale.LC_ALL)
+
+    try:
+        if platform.system() == 'Darwin':
+            locale.setlocale(locale.LC_ALL, str('de_DE'))
+        else:
+            locale.setlocale(locale.LC_ALL, str('de_DE.utf8'))
+
+        for fast_reader in (True, False, {'use_fast_converter': False}, {'use_fast_converter': True}):
+            t = ascii.read(['a b', '1.5 2'], format='basic', guess=False,
+                           fast_reader=fast_reader)
+            assert t['a'].dtype.kind == 'f'
+    except locale.Error as e:
+        pytest.skip('Locale error: {}'.format(e))
+    finally:
+        locale.setlocale(locale.LC_ALL, current)
+
+
+def test_no_units_for_char_columns():
+    '''Test that a char column of a Table is assigned no unit and not
+    a dimensionless unit.'''
+    t1 = Table([["A"]], names="B")
+    out = StringIO()
+    ascii.write(t1, out, format="ipac")
+    t2 = ascii.read(out.getvalue(), format="ipac", guess=False)
+    assert t2["B"].unit is None
+
+
+def test_initial_column_fill_values():
+    """Regression test for #5336, #5338."""
+
+    class TestHeader(ascii.BasicHeader):
+        def _set_cols_from_names(self):
+            self.cols = [ascii.Column(name=x) for x in self.names]
+            # Set some initial fill values
+            for col in self.cols:
+                col.fill_values = {'--': '0'}
+
+    class Tester(ascii.Basic):
+        header_class = TestHeader
+
+    reader = ascii.get_reader(Reader=Tester)
+
+    assert reader.read("""# Column definition is the first uncommented line
+# Default delimiter is the space character.
+a b c
+# Data starts after the header column definition, blank lines ignored
+-- 2 3
+4 5 6 """)['a'][0] is np.ma.masked
+
+
+def test_latex_no_trailing_backslash():
+    """
+    Test that latex/aastex file with no trailing backslash can be read.
+    """
+    lines = r"""
+\begin{table}
+\begin{tabular}{ccc}
+a & b & c \\
+1 & 1.0 & c \\ % comment
+3\% & 3.0 & e  % comment
+\end{tabular}
+\end{table}
+"""
+    dat = ascii.read(lines, format='latex')
+    assert dat.colnames == ['a', 'b', 'c']
+    assert np.all(dat['a'] == ['1', r'3\%'])
+    assert np.all(dat['c'] == ['c', 'e'])
+
+
+def text_aastex_no_trailing_backslash():
+    lines = r"""
+\begin{deluxetable}{ccc}
+\tablehead{\colhead{a} & \colhead{b} & \colhead{c}}
+\startdata
+1 & 1.0 & c \\
+2 & 2.0 & d \\ % comment
+3\% & 3.0 & e  % comment
+\enddata
+\end{deluxetable}
+"""
+    dat = ascii.read(lines, format='aastex')
+    assert dat.colnames == ['a', 'b', 'c']
+    assert np.all(dat['a'] == ['1', r'3\%'])
+    assert np.all(dat['c'] == ['c', 'e'])
+
+
+@pytest.mark.parametrize('encoding', ['utf8', 'latin1', 'cp1252'])
+def test_read_with_encoding(tmpdir, encoding):
+    data = {
+        'commented_header': u'# à b è \n 1 2 héllo',
+        'csv': u'à,b,è\n1,2,héllo'
+    }
+
+    testfile = str(tmpdir.join('test.txt'))
+    for fmt, content in data.items():
+        with open(testfile, 'w', encoding=encoding) as f:
+            f.write(content)
+
+        table = ascii.read(testfile, encoding=encoding)
+        assert table.pformat() == [' à   b    è  ',
+                                   '--- --- -----',
+                                   '  1   2 héllo']
+
+        for guess in (True, False):
+            table = ascii.read(testfile, format=fmt, fast_reader=False,
+                               encoding=encoding, guess=guess)
+            assert table['è'].dtype.kind == 'U'
+            assert table.pformat() == [' à   b    è  ',
+                                       '--- --- -----',
+                                       '  1   2 héllo']
+
+
+def test_unsupported_read_with_encoding(tmpdir):
+    # Fast reader is not supported, make sure it raises an exception
+    with pytest.raises(ascii.ParameterError):
+        ascii.read('t/simple3.txt', guess=False, fast_reader='force',
+                   encoding='latin1', format='fast_csv')
+
+
+def test_read_chunks_input_types():
+    """
+    Test chunked reading for different input types: file path, file object,
+    and string input.
+    """
+    fpath = 't/test5.dat'
+    t1 = ascii.read(fpath, header_start=1, data_start=3, )
+
+    for fp in (fpath, open(fpath, 'r'), open(fpath, 'r').read()):
+        t_gen = ascii.read(fp, header_start=1, data_start=3,
+                           guess=False, format='fast_basic',
+                           fast_reader={'chunk_size': 400, 'chunk_generator': True})
+        ts = list(t_gen)
+        for t in ts:
+            for col, col1 in zip(t.columns.values(), t1.columns.values()):
+                assert col.name == col1.name
+                assert col.dtype.kind == col1.dtype.kind
+
+        assert len(ts) == 4
+        t2 = table.vstack(ts)
+        assert np.all(t1 == t2)
+
+    for fp in (fpath, open(fpath, 'r'), open(fpath, 'r').read()):
+        # Now read the full table in chunks
+        t3 = ascii.read(fp, header_start=1, data_start=3,
+                        fast_reader={'chunk_size': 300})
+        assert np.all(t1 == t3)
+
+
+@pytest.mark.parametrize('masked', [True, False])
+def test_read_chunks_formats(masked):
+    """
+    Test different supported formats for chunked reading.
+    """
+    t1 = simple_table(size=102, cols=10, kinds='fS', masked=masked)
+    for i, name in enumerate(t1.colnames):
+        t1.rename_column(name, 'col{}'.format(i + 1))
+
+    # TO DO commented_header does not currently work due to the special-cased
+    # implementation of header parsing.
+
+    for format in 'tab', 'csv', 'no_header', 'rdb', 'basic':
+        out = StringIO()
+        ascii.write(t1, out, format=format)
+        t_gen = ascii.read(out.getvalue(), format=format,
+                           fast_reader={'chunk_size': 400, 'chunk_generator': True})
+        ts = list(t_gen)
+        for t in ts:
+            for col, col1 in zip(t.columns.values(), t1.columns.values()):
+                assert col.name == col1.name
+                assert col.dtype.kind == col1.dtype.kind
+
+        assert len(ts) > 4
+        t2 = table.vstack(ts)
+        assert np.all(t1 == t2)
+
+        # Now read the full table in chunks
+        t3 = ascii.read(out.getvalue(), format=format, fast_reader={'chunk_size': 400})
+        assert np.all(t1 == t3)
+
+
+def test_read_chunks_chunk_size_too_small():
+    fpath = 't/test5.dat'
+    with pytest.raises(ValueError) as err:
+        ascii.read(fpath, header_start=1, data_start=3,
+                   fast_reader={'chunk_size': 10})
+    assert 'no newline found in chunk (chunk_size too small?)' in str(err)
+
+
+def test_read_chunks_table_changes():
+    """Column changes type or size between chunks.  This also tests the case with
+    no final newline.
+    """
+    col = ['a b c'] + ['1.12334 xyz a'] * 50 + ['abcdefg 555 abc'] * 50
+    table = '\n'.join(col)
+    t1 = ascii.read(table, guess=False)
+    t2 = ascii.read(table, fast_reader={'chunk_size': 100})
+
+    # This also confirms that the dtypes are exactly the same, i.e.
+    # the string itemsizes are the same.
+    assert np.all(t1 == t2)
+
+
+def test_read_non_ascii():
+    """Test that pure-Python reader is used in case the file contains non-ASCII characters
+    in it.
+    """
+    table = Table.read(['col1, col2', '\u2119, \u01b4', '1, 2'], format='csv')
+    assert np.all(table['col1'] == ['\u2119', '1'])
+    assert np.all(table['col2'] == ['\u01b4', '2'])
+
+
+@pytest.mark.parametrize('enable', [True, False, 'force'])
+def test_kwargs_dict_guess(enable):
+    """Test that fast_reader dictionary is preserved through guessing sequence.
+    """
+    # Fails for enable=(True, 'force') - #5578
+    ascii.read('a\tb\n 1\t2\n3\t 4.0', fast_reader=dict(enable=enable))
+    assert get_read_trace()[-1]['kwargs']['Reader'] is (
+        ascii.Tab if (enable is False) else ascii.FastTab)
+    for k in get_read_trace():
+        if not k.get('status', 'Disabled').startswith('Disabled'):
+            assert k.get('kwargs').get('fast_reader').get('enable') is enable

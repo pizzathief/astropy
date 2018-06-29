@@ -8,22 +8,18 @@ ipac.py:
 :Author: Tom Aldcroft (aldcroft@head.cfa.harvard.edu)
 """
 
-from __future__ import absolute_import, division, print_function
 
 import re
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from textwrap import wrap
 from warnings import warn
 
-from ...extern import six
-from ...extern.six.moves import zip
 
 from . import core
 from . import fixedwidth
 from . import basic
-from ...utils import OrderedDict
 from ...utils.exceptions import AstropyUserWarning
-from ...table.pprint import _format_funcs, _auto_format_func
+from ...table.pprint import get_auto_format_func
 
 
 class IpacFormatErrorDBMS(Exception):
@@ -81,14 +77,15 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
                      ('real', core.FloatType),
                      ('char', core.StrType),
                      ('date', core.StrType))
-    definition='ignore'
+    definition = 'ignore'
     start_line = None
 
     def process_lines(self, lines):
         """Generator to yield IPAC header lines, i.e. those starting and ending with
-        delimiter character."""
+        delimiter character (with trailing whitespace stripped)"""
         delim = self.splitter.delimiter
         for line in lines:
+            line = line.rstrip()
             if line.startswith(delim) and line.endswith(delim):
                 yield line.strip(delim)
 
@@ -105,10 +102,10 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
             val = val.strip()
             try:
                 val = int(val)
-            except:
+            except Exception:
                 try:
                     val = float(val)
-                except:
+                except Exception:
                     # Strip leading/trailing quote.  The spec says that a matched pair
                     # of quotes is required, but this code will allow a non-quoted value.
                     for quote in ('"', "'"):
@@ -140,9 +137,9 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
                 # IPAC allows for continuation keywords, e.g.
                 # \SQL     = 'WHERE '
                 # \SQL     = 'SELECT (25 column names follow in next row.)'
-                if name in keywords and isinstance(val, six.string_types):
+                if name in keywords and isinstance(val, str):
                     prev_val = keywords[name]['value']
-                    if isinstance(prev_val, six.string_types):
+                    if isinstance(prev_val, str):
                         val = prev_val + val
 
                 keywords[name] = {'value': val}
@@ -158,7 +155,7 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
             if col_type_key.startswith(col.raw_type.lower()):
                 return col_type
         else:
-            raise ValueError('Unknown data type ""%s"" for column "%s"' % (
+            raise ValueError('Unknown data type ""{}"" for column "{}"'.format(
                 col.raw_type, col.name))
 
     def get_cols(self, lines):
@@ -193,7 +190,7 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
                 col.raw_type = header_vals[1][i].strip(' -')
                 col.type = self.get_col_type(col)
             if len(header_vals) > 2:
-                col.unit = header_vals[2][i].strip()  # Can't strip dashes here
+                col.unit = header_vals[2][i].strip() or None  # Can't strip dashes here
             if len(header_vals) > 3:
                 # The IPAC null value corresponds to the io.ascii bad_value.
                 # In this case there isn't a fill_value defined, so just put
@@ -217,8 +214,6 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
         self.names = [x.name for x in cols]
         self.cols = cols
 
-
-
     def str_vals(self):
 
         if self.DBMS:
@@ -237,7 +232,7 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
                                   'This causes duplicate column names: {0}'.format(doublenames))
 
         for name in namelist:
-            m = re.match('\w+', name)
+            m = re.match(r'\w+', name)
             if m.end() != len(name):
                 raise IpacFormatE('{0} - Only alphanumeric characters and _ '
                                   'are allowed in column names.'.format(name))
@@ -277,9 +272,10 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
             # This may be incompatible with mixin columns
             null = col.fill_values[core.masked]
             try:
-                format_func = _format_funcs.get(col_format, _auto_format_func)
+                auto_format_func = get_auto_format_func(col)
+                format_func = col.info._format_funcs.get(col_format, auto_format_func)
                 nullist.append((format_func(col_format, null)).strip())
-            except:
+            except Exception:
                 # It is possible that null and the column values have different
                 # data types (e.g. number and null = 'null' (i.e. a string).
                 # This could cause all kinds of exceptions, so a catch all
@@ -322,7 +318,7 @@ class IpacData(fixedwidth.FixedWidthData):
 
 
 class Ipac(basic.Basic):
-    """Read or write an IPAC format table.  See
+    r"""Read or write an IPAC format table.  See
     http://irsa.ipac.caltech.edu/applications/DDGEN/Doc/ipac_tbl.html::
 
       \\name=value
@@ -427,7 +423,7 @@ class Ipac(basic.Basic):
     header_class = IpacHeader
 
     def __init__(self, definition='ignore', DBMS=False):
-        super(Ipac, self).__init__()
+        super().__init__()
         # Usually the header is not defined in __init__, but here it need a keyword
         if definition in ['ignore', 'left', 'right']:
             self.header.ipac_definition = definition
@@ -441,7 +437,7 @@ class Ipac(basic.Basic):
 
         Parameters
         ----------
-        table: `~astropy.table.Table`
+        table : `~astropy.table.Table`
             Input table data
 
         Returns
@@ -457,13 +453,13 @@ class Ipac(basic.Basic):
         self.data.fill_values.append((core.masked, 'null'))
 
         # Check column names before altering
-        self.header.cols = list(six.itervalues(table.columns))
+        self.header.cols = list(table.columns.values())
         self.header.check_column_names(self.names, self.strict_names, self.guessing)
 
         core._apply_include_exclude_names(table, self.names, self.include_names, self.exclude_names)
 
         # Now use altered columns
-        new_cols = list(six.itervalues(table.columns))
+        new_cols = list(table.columns.values())
         # link information about the columns to the writer object (i.e. self)
         self.header.cols = new_cols
         self.data.cols = new_cols
@@ -486,7 +482,17 @@ class Ipac(basic.Basic):
                     lines.append('\\{0}={1!r}'.format(keyword.strip(), val))
                     # meta is not standardized: Catch some common Errors.
                 except TypeError:
-                    pass
+                    warn("Table metadata keyword {0} has been skipped.  "
+                         "IPAC metadata must be in the form {{'keywords':"
+                         "{{'keyword': {{'value': value}} }}".format(keyword),
+                         AstropyUserWarning)
+        ignored_keys = [key for key in table.meta if key not in ('keywords', 'comments')]
+        if any(ignored_keys):
+            warn("Table metadata keyword(s) {0} were not written.  "
+                 "IPAC metadata must be in the form {{'keywords':"
+                 "{{'keyword': {{'value': value}} }}".format(ignored_keys),
+                 AstropyUserWarning
+                )
 
         # Usually, this is done in data.write, but since the header is written
         # first, we need that here.

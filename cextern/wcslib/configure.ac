@@ -3,12 +3,12 @@
 #-----------------------------------------------------------------------------
 # Author: Mark Calabretta, Australia Telescope National Facility, CSIRO.
 # http://www.atnf.csiro.au/people/Mark.Calabretta
-# $Id: configure.ac,v 5.9 2015/07/21 09:20:04 mcalabre Exp $
+# $Id: configure.ac,v 5.18 2018/01/10 08:32:14 mcalabre Exp $
 #-----------------------------------------------------------------------------
 
-AC_INIT([WCSLIB], [5.9], [mark@calabretta.id.au], [wcslib-5.9])
+AC_INIT([WCSLIB], [5.18], [mark@calabretta.id.au], [wcslib-5.18])
 AC_PREREQ([2.53])
-AC_REVISION([$Revision: 5.9 $])
+AC_REVISION([$Revision: 5.18 $])
 AC_SUBST([PACKAGE_VERSION])
 AC_DEFINE_UNQUOTED([WCSLIB_VERSION], [$PACKAGE_VERSION], [Define wcslib version])
 
@@ -227,6 +227,7 @@ AC_CHECK_LIB([SystemStubs], [printf\$LDBLStub], [LIBS="$LIBS -lSystemStubs"],
 # Library and installation utilities.
 #------------------------------------
 # Static library generation.
+AC_SUBST([ARFLAGS])
 AC_PROG_RANLIB
 
 # Shared library generation.
@@ -243,7 +244,7 @@ if test "x$ac_cv_c_compiler_gnu" = xyes ; then
     SONAME="libwcs.$SHVER.dylib"
     SHRLD="$SHRLD -dynamiclib -single_module"
     SHRLD="$SHRLD -compatibility_version $SHVER -current_version $LIBVER"
-    SHRLN=
+    SHRLN="libwcs.dylib"
 
     case "$build_cpu" in
     powerpc*)

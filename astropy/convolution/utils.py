@@ -1,6 +1,4 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 import numpy as np
 
@@ -84,10 +82,13 @@ def discretize_model(model, x_range, y_range=None, mode='center', factor=10):
         instances of `~astropy.modeling.FittableModel` are passed to
         `~astropy.modeling.custom_model` and then evaluated.
     x_range : tuple
-        x range in which the model is evaluated.
+        x range in which the model is evaluated. The difference between the
+        upper an lower limit must be a whole number, so that the output array
+        size is well defined.
     y_range : tuple, optional
-        y range in which the model is evaluated.
-        Necessary only for 2D models.
+        y range in which the model is evaluated. The difference between the
+        upper an lower limit must be a whole number, so that the output array
+        size is well defined. Necessary only for 2D models.
     mode : str, optional
         One of the following modes:
             * ``'center'`` (default)
@@ -145,6 +146,15 @@ def discretize_model(model, x_range, y_range=None, mode='center', factor=10):
     ndim = model.n_inputs
     if ndim > 2:
         raise ValueError('discretize_model only supports 1-d and 2-d models.')
+
+    if not float(np.diff(x_range)).is_integer():
+        raise ValueError("The difference between the upper an lower limit of"
+                         " 'x_range' must be a whole number.")
+
+    if y_range:
+        if not float(np.diff(y_range)).is_integer():
+            raise ValueError("The difference between the upper an lower limit of"
+                             " 'y_range' must be a whole number.")
 
     if ndim == 2 and y_range is None:
         raise ValueError("y range not specified, but model is 2-d")
@@ -283,6 +293,6 @@ def discretize_integrate_2D(model, x_range, y_range):
     # Integrate over all pixels
     for i in range(x.size - 1):
         for j in range(y.size - 1):
-            values[j, i] = dblquad(model, x[i], x[i + 1],
+            values[j, i] = dblquad(lambda y, x: model(x, y), x[i], x[i + 1],
                                    lambda x: y[j], lambda x: y[j + 1])[0]
     return values

@@ -1,5 +1,11 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
+
+import pytest
+
 from .. import fnpickle, fnunpickle
+from ....tests.helper import catch_warnings
+from ....utils.exceptions import AstropyDeprecationWarning
+
 
 def test_fnpickling_simple(tmpdir):
     """
@@ -11,30 +17,21 @@ def test_fnpickling_simple(tmpdir):
 
     obj1 = 'astring'
     fnpickle(obj1, fn)
-    res = fnunpickle(fn)
+    res = fnunpickle(fn, 0)
     assert obj1 == res
 
-    #try without cPickle
-    fnpickle(obj1, fn, usecPickle=False)
-    res = fnunpickle(fn, usecPickle=False)
-    assert obj1 == res
-
-    #now try with a file-like object instead of a string
+    # now try with a file-like object instead of a string
     with open(fn, 'wb') as f:
         fnpickle(obj1, f)
     with open(fn, 'rb') as f:
         res = fnunpickle(f)
         assert obj1 == res
 
-    #same without cPickle
-    with open(fn, 'wb') as f:
-        fnpickle(obj1, f, usecPickle=False)
-    with open(fn, 'rb') as f:
-        res = fnunpickle(f, usecPickle=False)
-        assert obj1 == res
+    with catch_warnings(AstropyDeprecationWarning):
+        fnunpickle(fn, 0, True)
 
 
-class ToBePickled(object):
+class ToBePickled:
     def __init__(self, item):
         self.item = item
 
@@ -70,7 +67,7 @@ def test_fnpickling_protocol(tmpdir):
     obj2 = ToBePickled(obj1)
 
     for p in range(pickle.HIGHEST_PROTOCOL + 1):
-        fn = str(tmpdir.join('testp%i.pickle' % p))
+        fn = str(tmpdir.join('testp{}.pickle'.format(p)))
         fnpickle(obj2, fn, protocol=p)
         res = fnunpickle(fn)
         assert res == obj2
@@ -81,11 +78,10 @@ def test_fnpickling_many(tmpdir):
     Tests the `fnpickle` and `fnupickle` functions' ability to pickle
     and unpickle multiple objects from a single file.
     """
-    from ....tests.helper import pytest
 
     fn = str(tmpdir.join('test3.pickle'))
 
-    #now try multiples
+    # now try multiples
     obj3 = 328.3432
     obj4 = 'blahblahfoo'
     fnpickle(obj3, fn)

@@ -20,7 +20,7 @@ The following shows a few of the ASCII formats that are available, while the sec
 * :class:`~astropy.io.ascii.Basic`: basic table with customizable delimiters and header configurations
 * :class:`~astropy.io.ascii.Cds`: `CDS format table <http://vizier.u-strasbg.fr/doc/catstd.htx>`_ (also Vizier and ApJ machine readable tables)
 * :class:`~astropy.io.ascii.Daophot`: table from the IRAF DAOphot package
-* :class:`~astropy.io.ascii.Ecsv`: `Enhanced CSV format <https://github.com/astropy/astropy-APEs/blob/master/APE6.rst>`_
+* :class:`~astropy.io.ascii.Ecsv`: :ref:`ecsv_format` for lossless round-trip of data tables
 * :class:`~astropy.io.ascii.FixedWidth`: table with fixed-width columns (see also :ref:`fixed_width_gallery`)
 * :class:`~astropy.io.ascii.Ipac`: `IPAC format table <http://irsa.ipac.caltech.edu/applications/DDGEN/Doc/ipac_tbl.html>`_
 * :class:`~astropy.io.ascii.HTML`: HTML format table contained in a <table> tag
@@ -34,7 +34,7 @@ be easily accommodated.
 
 .. note::
 
-    It is also possible to use the functionality from
+    It is also possible (and encouraged) to use the functionality from
     :mod:`astropy.io.ascii` through a higher-level interface in the
     :ref:`Data Tables <astropy-table>` package. See :ref:`table_io` for more details.
 
@@ -55,7 +55,7 @@ This table can be read with the following::
 
   >>> from astropy.io import ascii
   >>> data = ascii.read("sources.dat")  # doctest: +SKIP
-  >>> print data  # doctest: +SKIP
+  >>> print(data)                       # doctest: +SKIP
   obsid redshift  X    Y      object
   ----- -------- ---- ---- -----------
    3102     0.32 4167 4085 Q1250+568-A
@@ -96,6 +96,14 @@ disable the fast engine::
 
    >>> data = ascii.read(lines, format='csv', fast_reader=False)
 
+For reading very large tables see the section on :ref:`chunk_reading`.
+
+.. Note::
+
+   Reading a table which contains unicode characters is supported; if you need
+   a different encoding, you can specify the ``encoding`` parameter in the
+   pure-Python readers.
+
 Writing Tables
 --------------
 
@@ -104,7 +112,7 @@ table.  For example the following writes a table as a simple space-delimited
 file::
 
   >>> import numpy as np
-  >>> from astropy.table import Table, Column
+  >>> from astropy.table import Table, Column, MaskedColumn
   >>> x = np.array([1, 2, 3])
   >>> y = x ** 2
   >>> data = Table([x, y], names=['x', 'y'])
@@ -139,37 +147,46 @@ To disable this engine, use the parameter ``fast_writer``::
 
    >>> ascii.write(data, 'values.csv', format='csv', fast_writer=False)  # doctest: +SKIP
 
-Finally, one can write data in the `ECSV table format
-<https://github.com/astropy/astropy-APEs/blob/master/APE6.rst>`_ which allows
+Finally, one can write data in the :ref:`ecsv_format` which allows
 preserving table meta-data such as column data types and units.  In this way a
-data table can be stored and read back as ASCII with no loss of information.
+data table (including one with masked entries) can be stored and read back as
+ASCII with no loss of information.
 
-  >>> t = Table()
-  >>> t['x'] = Column([1.0, 2.0], unit='m', dtype='float32')
-  >>> t['y'] = Column([False, True], dtype='bool')
+  >>> t = Table(masked=True)
+  >>> t['x'] = MaskedColumn([1.0, 2.0], unit='m', dtype='float32')
+  >>> t['x'][1] = np.ma.masked
+  >>> t['y'] = MaskedColumn([False, True], dtype='bool')
 
-  >>> from astropy.extern.six.moves import StringIO
-  >>> fh = StringIO()
+  >>> import io
+  >>> fh = io.StringIO()
   >>> t.write(fh, format='ascii.ecsv')  # doctest: +SKIP
   >>> table_string = fh.getvalue()      # doctest: +SKIP
   >>> print(table_string)               # doctest: +SKIP
   # %ECSV 0.9
   # ---
-  # columns:
-  # - {name: x, unit: m, type: float32}
-  # - {name: y, type: bool}
+  # datatype:
+  # - {name: x, unit: m, datatype: float32}
+  # - {name: y, datatype: bool}
   x y
   1.0 False
-  2.0 True
+  "" True
 
   >>> Table.read(table_string, format='ascii')  # doctest: +SKIP
-  <Table length=2>
+  <Table masked=True length=2>
      x      y
      m
   float32  bool
   ------- -----
       1.0 False
-      2.0  True
+       --  True
+
+.. Note::
+
+   For most supported formats one can write a masked table and then
+   read it back without losing information about the masked table
+   entries.  This is accomplished by using a blank string entry to
+   indicate a masked (missing) value.  See the :ref:`replace_bad_or_missing_values`
+   section for more information.
 
 .. _supported_formats:
 
@@ -199,6 +216,7 @@ the fast Cython/C engine for reading and writing.
 ``latex``                   Yes      :class:`~astropy.io.ascii.Latex`: LaTeX table
 ``no_header``               Yes  Yes :class:`~astropy.io.ascii.NoHeader`: Basic table with no headers
 ``rdb``                     Yes  Yes :class:`~astropy.io.ascii.Rdb`: Tab-separated with a type definition header line
+``rst``                     Yes      :class:`~astropy.io.ascii.RST`: reStructuredText simple format table
 ``sextractor``                       :class:`~astropy.io.ascii.SExtractor`: SExtractor format table
 ``tab``                     Yes  Yes :class:`~astropy.io.ascii.Tab`: Basic table with tab-separated values
 ========================= ===== ==== ============================================================================================

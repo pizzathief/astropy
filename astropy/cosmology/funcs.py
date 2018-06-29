@@ -2,16 +2,12 @@
 """
 Convenience functions for `astropy.cosmology`.
 """
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 import warnings
 import numpy as np
 
-from .core import default_cosmology as _default_cosmology
 from .core import CosmologyError
 from ..units import Quantity
-from ..utils import deprecated
 
 __all__ = ['z_at_value']
 
@@ -126,8 +122,7 @@ there is no solution, or that there is more than one solution between
 zmin and zmax satisfying fval = func(z).""")
 
     if isinstance(fval_zmin, Quantity):
-        unit = fval_zmin.unit
-        val = fval.to(unit).value
+        val = fval.to_value(fval_zmin.unit)
         f = lambda z: abs(func(z).value - val)
     else:
         f = lambda z: abs(func(z) - fval)

@@ -1,8 +1,4 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
-from ..extern import six
-from ..extern.six.moves import zip as izip
 
 import platform
 import warnings
@@ -15,10 +11,12 @@ from ..utils.exceptions import AstropyUserWarning
 
 __all__ = ['TableGroups', 'ColumnGroups']
 
+
 def table_group_by(table, keys):
     # index copies are unnecessary and slow down _table_group_by
     with table.index_mode('discard_on_copy'):
         return _table_group_by(table, keys)
+
 
 def _table_group_by(table, keys):
     """
@@ -37,7 +35,7 @@ def _table_group_by(table, keys):
     """
     from .table import Table
     # Pre-convert string to tuple of strings, or Table to the underlying structured array
-    if isinstance(keys, six.string_types):
+    if isinstance(keys, str):
         keys = (keys,)
 
     if isinstance(keys, (list, tuple)):
@@ -86,7 +84,7 @@ def _table_group_by(table, keys):
     # If the sort is not stable (preserves original table order) then sort idx_sort in
     # place within each group.
     if not stable_sort:
-        for i0, i1 in izip(indices[:-1], indices[1:]):
+        for i0, i1 in zip(indices[:-1], indices[1:]):
             idx_sort[i0:i1].sort()
 
     # Make a new table and set the _groups to the appropriate TableGroups object.
@@ -116,7 +114,6 @@ def column_group_by(column, keys):
     grouped_column : Column object with groups attr set accordingly
     """
     from .table import Table
-    from .column import Column
 
     if isinstance(keys, Table):
         keys = keys.as_array()
@@ -154,7 +151,7 @@ def column_group_by(column, keys):
     return out
 
 
-class BaseGroups(object):
+class BaseGroups:
     """
     A class to represent groups within a table of heterogeneous data.
 
@@ -183,7 +180,7 @@ class BaseGroups(object):
     def __getitem__(self, item):
         parent = self.parent
 
-        if isinstance(item, int):
+        if isinstance(item, (int, np.integer)):
             i0, i1 = self.indices[item], self.indices[item + 1]
             out = parent[i0:i1]
             out.groups._keys = parent.groups.keys[item]
@@ -191,12 +188,12 @@ class BaseGroups(object):
             indices0, indices1 = self.indices[:-1], self.indices[1:]
             try:
                 i0s, i1s = indices0[item], indices1[item]
-            except:
+            except Exception:
                 raise TypeError('Index item for groups attribute must be a slice, '
                                 'numpy mask or int array')
-            mask = np.zeros(len(parent), dtype=np.bool)
+            mask = np.zeros(len(parent), dtype=bool)
             # Is there a way to vectorize this in numpy?
-            for i0, i1 in izip(i0s, i1s):
+            for i0, i1 in zip(i0s, i1s):
                 mask[i0:i1] = True
             out = parent[mask]
             out.groups._keys = parent.groups.keys[item]
@@ -255,7 +252,7 @@ class ColumnGroups(BaseGroups):
                         func = np.add
                     vals = func.reduceat(par_col, i0s)
             else:
-                vals = np.array([func(par_col[i0: i1]) for i0, i1 in izip(i0s, i1s)])
+                vals = np.array([func(par_col[i0: i1]) for i0, i1 in zip(i0s, i1s)])
         except Exception:
             raise TypeError("Cannot aggregate column '{0}' with type '{1}'"
                             .format(par_col.info.name,
@@ -296,7 +293,7 @@ class ColumnGroups(BaseGroups):
         out : Column
             New column with the aggregated rows.
         """
-        mask = np.empty(len(self), dtype=np.bool)
+        mask = np.empty(len(self), dtype=bool)
         for i, group_column in enumerate(self):
             mask[i] = func(group_column)
 
@@ -348,7 +345,7 @@ class TableGroups(BaseGroups):
         out_cols = []
         parent_table = self.parent_table
 
-        for col in six.itervalues(parent_table.columns):
+        for col in parent_table.columns.values():
             # For key columns just pick off first in each group since they are identical
             if col.info.name in self.key_colnames:
                 new_col = col.take(i0s)
@@ -356,7 +353,7 @@ class TableGroups(BaseGroups):
                 try:
                     new_col = col.groups.aggregate(func)
                 except TypeError as err:
-                    warnings.warn(six.text_type(err), AstropyUserWarning)
+                    warnings.warn(str(err), AstropyUserWarning)
                     continue
 
             out_cols.append(new_col)
@@ -393,7 +390,7 @@ class TableGroups(BaseGroups):
         out : Table
             New table with the aggregated rows.
         """
-        mask = np.empty(len(self), dtype=np.bool)
+        mask = np.empty(len(self), dtype=bool)
         key_colnames = self.key_colnames
         for i, group_table in enumerate(self):
             mask[i] = func(group_table, key_colnames)

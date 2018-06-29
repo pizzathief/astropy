@@ -5,8 +5,6 @@ This package defines the SI units.  They are also available in the
 `astropy.units` namespace.
 
 """
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 from ..constants import si as _si
 from .core import UnitBase, Unit, def_unit
@@ -71,9 +69,9 @@ def_unit(['arcsec', 'arcsecond'], 1.0 / 3600.0 * deg, namespace=_ns,
 # These special formats should only be used for the non-prefix versions
 arcsec._format = {'latex': r'{}^{\prime\prime}', 'unicode': '″'}
 def_unit(['mas'], 0.001 * arcsec, namespace=_ns,
-         doc="arc second: angular measurement")
+         doc="milli arc second: angular measurement")
 def_unit(['uas'], 0.000001 * arcsec, namespace=_ns,
-         doc="arc second: angular measurement",
+         doc="micro arc second: angular measurement",
          format={'latex': r'\mu as', 'unicode': 'μas'})
 
 def_unit(['sr', 'steradian'], rad ** 2, namespace=_ns, prefixes=True,
@@ -215,7 +213,7 @@ def_unit(['lx', 'lux'], lm * m ** -2, namespace=_ns, prefixes=True,
 
 def_unit(['Bq', 'becquerel'], Hz, namespace=_ns, prefixes=False,
          doc="becquerel: unit of radioactivity")
-def_unit(['Ci', 'curie'], Bq / 3.7e10, namespace=_ns, prefixes=False,
+def_unit(['Ci', 'curie'], Bq * 3.7e10, namespace=_ns, prefixes=False,
          doc="curie: unit of radioactivity")
 
 

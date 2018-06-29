@@ -5,12 +5,16 @@ writing all the meta data associated with an astropy Table object.
 """
 
 import re
-
-from ...utils import OrderedDict
-from ...extern import six
+from collections import OrderedDict
+import contextlib
+import warnings
 
 from . import core, basic
-from ...table import meta
+from ...table import meta, serialize
+from ...utils.data_info import serialize_context_as
+from ...utils.exceptions import AstropyWarning
+
+__doctest_requires__ = {'Ecsv': ['yaml']}
 
 ECSV_VERSION = '0.9'
 DELIMITERS = (' ', ',')
@@ -48,7 +52,7 @@ class EcsvHeader(basic.BasicHeader):
         for the *last* comment line as defining the column names.
         """
         if self.splitter.delimiter not in DELIMITERS:
-            raise ValueError('only space and comma are allowed for delimiter in ECVS format')
+            raise ValueError('only space and comma are allowed for delimiter in ECSV format')
 
         for col in self.cols:
             if len(getattr(col, 'shape', ())) > 1:
@@ -56,7 +60,7 @@ class EcsvHeader(basic.BasicHeader):
                                  .format(col.info.name))
 
         # Now assemble the header dict that will be serialized by the YAML dumper
-        header = {'cols': self.cols}
+        header = {'cols': self.cols, 'schema': 'astropy-2.0'}
 
         if self.table_meta:
             header['meta'] = self.table_meta
@@ -96,6 +100,9 @@ class EcsvHeader(basic.BasicHeader):
             List of table lines
 
         """
+        # Cache a copy of the original input lines before processing below
+        raw_lines = lines
+
         # Extract non-blank comment (header) lines with comment character stripped
         lines = list(self.process_lines(lines))
 
@@ -118,6 +125,13 @@ class EcsvHeader(basic.BasicHeader):
 
         try:
             header = meta.get_header_from_yaml(lines)
+        except ImportError as exc:
+            if 'PyYAML package is required' in str(exc):
+                warnings.warn("file looks like ECSV format but PyYAML is not installed "
+                              "so it cannot be parsed as ECSV",
+                              AstropyWarning)
+            raise core.InconsistentTableError('unable to parse yaml in meta header'
+                                              ' (PyYAML package is required)')
         except meta.YamlParseError:
             raise core.InconsistentTableError('unable to parse yaml in meta header')
 
@@ -127,14 +141,28 @@ class EcsvHeader(basic.BasicHeader):
         if 'delimiter' in header:
             delimiter = header['delimiter']
             if delimiter not in DELIMITERS:
-                raise ValueError('only space and comma are allowed for delimiter in ECVS format')
+                raise ValueError('only space and comma are allowed for delimiter in ECSV format')
             self.splitter.delimiter = delimiter
             self.data.splitter.delimiter = delimiter
 
         # Create the list of io.ascii column objects from `header`
         header_cols = OrderedDict((x['name'], x) for x in header['datatype'])
         self.names = [x['name'] for x in header['datatype']]
-        self._set_cols_from_names()  # BaseHeader method to create self.cols
+
+        # Read the first non-commented line of table and split to get the CSV
+        # header column names.  This is essentially what the Basic reader does.
+        header_line = next(super().process_lines(raw_lines))
+        header_names = next(self.splitter([header_line]))
+
+        # Check for consistency of the ECSV vs. CSV header column names
+        if header_names != self.names:
+            raise core.InconsistentTableError('column names from ECSV header {} do not '
+                             'match names from header line of CSV data {}'
+                             .format(self.names, header_names))
+
+        # BaseHeader method to create self.cols, which is a list of
+        # io.ascii.core.Column objects (*not* Table Column objects).
+        self._set_cols_from_names()
 
         # Transfer attributes from the column descriptor stored in the input
         # header YAML metadata to the new columns to create this table.
@@ -144,7 +172,7 @@ class EcsvHeader(basic.BasicHeader):
                     setattr(col, attr, header_cols[col.name][attr])
             col.dtype = header_cols[col.name]['datatype']
             # ECSV "string" means numpy dtype.kind == 'U' AKA str in Python 3
-            if six.PY3 and col.dtype == 'string':
+            if col.dtype == 'string':
                 col.dtype = 'str'
             if col.dtype.startswith('complex'):
                 raise TypeError('ecsv reader does not support complex number types')
@@ -152,11 +180,25 @@ class EcsvHeader(basic.BasicHeader):
 
 class EcsvOutputter(core.TableOutputter):
     """
-    Output the table as an astropy.table.Table object.  This overrides the
-    default converters to be an empty list because there is no "guessing"
-    of the conversion function.
+    After reading the input lines and processing, convert the Reader columns
+    and metadata to an astropy.table.Table object.  This overrides the default
+    converters to be an empty list because there is no "guessing" of the
+    conversion function.
     """
     default_converters = []
+
+    def __call__(self, cols, meta):
+        # Convert to a Table with all plain Column subclass columns
+        out = super().__call__(cols, meta)
+
+        # If mixin columns exist (based on the special '__mixin_columns__'
+        # key in the table ``meta``), then use that information to construct
+        # appropriate mixin columns and remove the original data columns.
+        # If no __mixin_columns__ exists then this function just passes back
+        # the input table.
+        out = serialize._construct_mixins_from_columns(out)
+
+        return out
 
 
 class Ecsv(basic.Basic):
@@ -166,19 +208,53 @@ class Ecsv(basic.Basic):
     and column meta-data, in particular the data type and unit.  For details
     see: https://github.com/astropy/astropy-APEs/blob/master/APE6.rst.
 
-    For example::
+    Examples
+    --------
 
-      # %ECSV 0.9
-      # ---
-      # columns:
-      # - {name: a, unit: m / s, type: int64, format: '%03d'}
-      # - {name: b, unit: km, type: int64, description: This is column b}
-      a b
-      001 2
-      004 3
+    >>> from astropy.table import Table
+    >>> ecsv_content = '''# %ECSV 0.9
+    ... # ---
+    ... # datatype:
+    ... # - {name: a, unit: m / s, datatype: int64, format: '%03d'}
+    ... # - {name: b, unit: km, datatype: int64, description: This is column b}
+    ... a b
+    ... 001 2
+    ... 004 3
+    ... '''
+    >>> Table.read(ecsv_content, format='ascii.ecsv')
+    <Table length=2>
+      a     b
+    m / s   km
+    int64 int64
+    ----- -----
+      001     2
+      004     3
     """
     _format_name = 'ecsv'
     _description = 'Enhanced CSV'
+    _io_registry_suffix = '.ecsv'
 
     header_class = EcsvHeader
     outputter_class = EcsvOutputter
+
+    def update_table_data(self, table):
+        """
+        Update table columns in place if mixin columns are present.
+
+        This is a hook to allow updating the table columns after name
+        filtering but before setting up to write the data.  This is currently
+        only used by ECSV and is otherwise just a pass-through.
+
+        Parameters
+        ----------
+        table : `astropy.table.Table`
+            Input table for writing
+
+        Returns
+        -------
+        table : `astropy.table.Table`
+            Output table for writing
+        """
+        with serialize_context_as('ecsv'):
+            out = serialize._represent_mixins_as_columns(table)
+        return out

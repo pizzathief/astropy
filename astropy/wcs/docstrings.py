@@ -1,5 +1,4 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 # It gets to be really tedious to type long docstrings in ANSI C
 # syntax (since multi-line string literals are not valid).
@@ -544,7 +543,7 @@ already set.
 Alternatively, if `~astropy.wcs.Wcsprm.mjdobs` is set and
 `~astropy.wcs.Wcsprm.dateobs` isn't, then `~astropy.wcs.Wcsprm.datfix`
 derives `~astropy.wcs.Wcsprm.dateobs` from it.  If both are set but
-disagree by more than half a day then `~.exceptions.ValueError` is raised.
+disagree by more than half a day then `ValueError` is raised.
 
 Returns
 -------

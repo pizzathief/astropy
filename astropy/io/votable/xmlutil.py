@@ -3,7 +3,6 @@
 Various XML-related utilities
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 # ASTROPY
 from ...logger import log
@@ -55,7 +54,7 @@ _token_regex = r"(?![\r\l\t ])[^\r\l\t]*(?![\r\l\t ])"
 
 def check_token(token, attr_name, config=None, pos=None):
     """
-    Raises a `~.exceptions.ValueError` if *token* is not a valid XML token.
+    Raises a `ValueError` if *token* is not a valid XML token.
 
     As defined by XML Schema Part 2.
     """

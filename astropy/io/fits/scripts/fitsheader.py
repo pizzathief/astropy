@@ -42,13 +42,10 @@ header that describes the compression.
 With Astropy installed, please run ``fitsheader --help`` to see the full usage
 documentation.
 """
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 import sys
 
 from ... import fits
-from .... import table
 from .... import log
 
 
@@ -57,7 +54,7 @@ class ExtensionNotFoundException(Exception):
     pass
 
 
-class HeaderFormatter(object):
+class HeaderFormatter:
     """Class to format the header(s) of a FITS file for display by the
     `fitsheader` tool; essentially a wrapper around a `HDUList` object.
 
@@ -72,7 +69,7 @@ class HeaderFormatter(object):
 
     Raises
     ------
-    IOError
+    OSError
         If `filename` does not exist or cannot be read.
     """
     def __init__(self, filename):
@@ -133,17 +130,14 @@ class HeaderFormatter(object):
         for idx, hdu in enumerate(hdukeys):
             try:
                 cards = self._get_cards(hdu, keywords, compressed)
-
-                if idx > 0:  # Separate HDUs by a blank line
-                    result.append('\n')
-                result.append('# HDU {hdu} in {filename}:\n'.format(
-                              filename=self.filename,
-                              hdu=hdu
-                              ))
-                result.append('{0}\n'.format('\n'.join([str(c)
-                                                        for c in cards])))
             except ExtensionNotFoundException:
-                pass
+                continue
+
+            if idx > 0:  # Separate HDUs by a blank line
+                result.append('\n')
+            result.append('# HDU {} in {}:\n'.format(hdu, self.filename))
+            for c in cards:
+                result.append('{}\n'.format(c))
         return ''.join(result)
 
     def _get_cards(self, hdukey, keywords, compressed):
@@ -224,6 +218,7 @@ class TableHeaderFormatter(HeaderFormatter):
                 pass
 
         if tablerows:
+            from .... import table
             return table.Table(tablerows)
         return None
 
@@ -244,7 +239,7 @@ def print_headers_traditional(args):
             print(formatter.parse(args.extensions,
                                   args.keywords,
                                   args.compressed), end='')
-        except IOError as e:
+        except OSError as e:
             log.error(str(e))
 
 
@@ -266,7 +261,7 @@ def print_headers_as_table(args):
                                   args.compressed)
             if tbl:
                 tables.append(tbl)
-        except IOError as e:
+        except OSError as e:
             log.error(str(e))  # file not found or unreadable
     # Concatenate the tables
     if len(tables) == 0:
@@ -274,6 +269,7 @@ def print_headers_as_table(args):
     elif len(tables) == 1:
         resulting_table = tables[0]
     else:
+        from .... import table
         resulting_table = table.vstack(tables)
     # Print the string representation of the concatenated table
     resulting_table.write(sys.stdout, format=args.table)
@@ -281,7 +277,7 @@ def print_headers_as_table(args):
 
 def main(args=None):
     """This is the main function called by the `fitsheader` script."""
-    from astropy.utils.compat import argparse
+    import argparse
 
     parser = argparse.ArgumentParser(
         description=('Print the header(s) of a FITS file. '
@@ -325,7 +321,7 @@ def main(args=None):
             print_headers_as_table(args)
         else:
             print_headers_traditional(args)
-    except IOError as e:
-        # A 'Broken pipe' IOError may occur when stdout is closed prematurely,
+    except OSError as e:
+        # A 'Broken pipe' OSError may occur when stdout is closed prematurely,
         # eg. when calling `fitsheader file.fits | head`. We let this pass.
         pass

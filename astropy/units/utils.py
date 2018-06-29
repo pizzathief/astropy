@@ -7,20 +7,15 @@ None of the functions in the module are meant for use outside of the
 package.
 """
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 import numbers
 import io
 import re
-import warnings
+from fractions import Fraction
 
 import numpy as np
 from numpy import finfo
 
-from ..extern import six
-from ..utils.compat.fractions import Fraction
-from ..utils.exceptions import AstropyDeprecationWarning
 
 _float_finfo = finfo(float)
 # take float here to ensure comparison with another float is fast
@@ -35,7 +30,7 @@ def _get_first_sentence(s):
     returns.
     """
 
-    x = re.match(".*?\S\.\s", s)
+    x = re.match(r".*?\S\.\s", s)
     if x is not None:
         s = x.group(0)
     return s.replace('\n', ' ')
@@ -53,7 +48,7 @@ def _iter_unit_summary(namespace):
     # prefixes
     units = []
     has_prefixes = set()
-    for key, val in six.iteritems(namespace):
+    for key, val in namespace.items():
         # Skip non-unit items
         if not isinstance(val, core.UnitBase):
             continue
@@ -80,7 +75,7 @@ def _iter_unit_summary(namespace):
                 unit._represents.to_string('latex')[1:-1])
         aliases = ', '.join('``{0}``'.format(x) for x in unit.aliases)
 
-        yield (unit, doc, represents, aliases, unit.name in has_prefixes)
+        yield (unit, doc, represents, aliases, 'Yes' if unit.name in has_prefixes else 'No')
 
 
 def generate_unit_summary(namespace):
@@ -120,7 +115,46 @@ def generate_unit_summary(namespace):
      - {1}
      - {2}
      - {3}
-     - {4!s:.1}
+     - {4}
+""".format(*unit_summary))
+
+    return docstring.getvalue()
+
+
+def generate_prefixonly_unit_summary(namespace):
+    """
+    Generates table entries for units in a namespace that are just prefixes
+    without the base unit.  Note that this is intended to be used *after*
+    `generate_unit_summary` and therefore does not include the table header.
+
+    Parameters
+    ----------
+    namespace : dict
+        A namespace containing units that are prefixes but do *not* have the
+        base unit in their namespace.
+
+    Returns
+    -------
+    docstring : str
+        A docstring containing a summary table of the units.
+    """
+    from . import PrefixUnit
+
+    faux_namespace = {}
+    for nm, unit in namespace.items():
+        if isinstance(unit, PrefixUnit):
+            base_unit = unit.represents.bases[0]
+            faux_namespace[base_unit.name] = base_unit
+
+    docstring = io.StringIO()
+
+    for unit_summary in _iter_unit_summary(faux_namespace):
+        docstring.write("""
+   * - Prefixes for ``{0}``
+     - {1} prefixes
+     - {2}
+     - {3}
+     - Only
 """.format(*unit_summary))
 
     return docstring.getvalue()
@@ -155,66 +189,55 @@ def sanitize_scale(scale):
 
 
 def validate_power(p, support_tuples=False):
-    """
-    Handles the conversion of a power to a floating point or a
-    rational number.
+    """Convert a power to a floating point value, an integer, or a Fraction.
+
+    If a fractional power can be represented exactly as a floating point
+    number, convert it to a float, to make the math much faster; otherwise,
+    retain it as a `fractions.Fraction` object to avoid losing precision.
+    Conversely, if the value is indistinguishable from a rational number with a
+    low-numbered denominator, convert to a Fraction object.
 
     Parameters
     ----------
-    support_tuples : bool, optional
-        If `True`, treat 2-tuples as `Fraction` objects.  This
-        behavior is deprecated and will be removed in astropy 0.5.
+    p : float, int, Rational, Fraction
+        Power to be converted
     """
-    # For convenience, treat tuples as Fractions
-    if support_tuples and isinstance(p, tuple) and len(p) == 2:
-        # Deprecated in 0.3.1
-        warnings.warn(
-            "Using a tuple as a fractional power is deprecated and may be "
-            "removed in a future version.  Use Fraction(n, d) instead.",
-            AstropyDeprecationWarning)
-        p = Fraction(p[0], p[1])
-
-    if isinstance(p, (numbers.Rational, Fraction)):
-        # If the fractional power can be represented *exactly* as a
-        # floating point number, we convert it to a float, to make the
-        # math much faster, otherwise, we retain it as a
-        # `fractions.Fraction` object to avoid losing precision.
-        denom = p.denominator
-        if denom == 1:
-            p = int(p.numerator)
-        # This is bit-twiddling hack to see if the integer is a
-        # power of two
-        elif (denom & (denom - 1)) == 0:
+    denom = getattr(p, 'denominator', None)
+    if denom is None:
+        try:
             p = float(p)
-    else:
-        if not np.isscalar(p):
-            raise ValueError(
-                "Quantities and Units may only be raised to a scalar power")
+        except Exception:
+            if not np.isscalar(p):
+                raise ValueError("Quantities and Units may only be raised "
+                                 "to a scalar power")
+            else:
+                raise
 
-        p = float(p)
-
-        # If the value is indistinguishable from a rational number
-        # with a low-numbered denominator, convert to a Fraction
-        # object.  We don't want to convert for denominators that are
-        # a power of 2, since those can be perfectly represented, and
-        # subsequent operations are much faster if they are retained
-        # as floats.  Nor do we need to test values that are divisors
-        # of a higher number, such as 3, since it is already addressed
-        # by 6.
-
-        # First check for denominator of 1
         if (p % 1.0) == 0.0:
+            # Denominators of 1 can just be integers.
             p = int(p)
-        # Leave alone if the denominator is exactly 2, 4 or 8
         elif (p * 8.0) % 1.0 == 0.0:
+            # Leave alone if the denominator is exactly 2, 4 or 8, since this
+            # can be perfectly represented as a float, which means subsequent
+            # operations are much faster.
             pass
         else:
-            for i in [10, 9, 7, 6]:
+            # Convert floats indistinguishable from a rational to Fraction.
+            # Here, we do not need to test values that are divisors of a higher
+            # number, such as 3, since it is already addressed by 6.
+            for i in (10, 9, 7, 6):
                 scaled = p * float(i)
                 if((scaled + 4. * _float_finfo.eps) % 1.0 <
                    8. * _float_finfo.eps):
                     p = Fraction(int(round(scaled)), i)
                     break
+
+    elif denom == 1:
+        p = int(p.numerator)
+
+    elif (denom & (denom - 1)) == 0:
+        # Above is a bit-twiddling hack to see if denom is a power of two.
+        p = float(p)
 
     return p
 
@@ -232,3 +255,11 @@ def resolve_fractions(a, b):
     elif not a_is_fraction and b_is_fraction:
         a = Fraction(a)
     return a, b
+
+
+def quantity_asanyarray(a, dtype=None):
+    from .quantity import Quantity
+    if not isinstance(a, np.ndarray) and not np.isscalar(a) and any(isinstance(x, Quantity) for x in a):
+        return Quantity(a, dtype=dtype)
+    else:
+        return np.asanyarray(a, dtype=dtype)

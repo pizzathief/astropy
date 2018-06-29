@@ -4,31 +4,38 @@
     Test the Quantity class and related.
 """
 
-from __future__ import (absolute_import, unicode_literals, division,
-                        print_function)
-
 import copy
+import pickle
 import decimal
+from fractions import Fraction
 
+import pytest
 import numpy as np
 from numpy.testing import (assert_allclose, assert_array_equal,
                            assert_array_almost_equal)
 
-
-from ...tests.helper import raises, pytest
+from ...tests.helper import catch_warnings, raises
 from ...utils import isiterable, minversion
-from ...utils.compat import NUMPY_LT_1_7
-from ...utils.compat.fractions import Fraction
+from ...utils.compat import NUMPY_LT_1_14
+from ...utils.exceptions import AstropyDeprecationWarning
 from ... import units as u
 from ...units.quantity import _UNIT_NOT_INITIALISED
-from ...extern.six.moves import xrange
-from ...extern.six.moves import cPickle as pickle
-from ...extern import six
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from distutils.version import LooseVersion
+    MATPLOTLIB_LT_15 = LooseVersion(matplotlib.__version__) < LooseVersion("1.5")
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
 
 """ The Quantity class will represent a number + unit + uncertainty """
 
 
-class TestQuantityCreation(object):
+class TestQuantityCreation:
 
     def test_1(self):
         # create objects through operations with Unit objects:
@@ -74,6 +81,42 @@ class TestQuantityCreation(object):
         with pytest.raises(ValueError):  # Until @mdboom fixes the errors in units
             q1 = u.Quantity(11.412, unit="testingggg")
 
+    def test_nan_inf(self):
+        # Not-a-number
+        q = u.Quantity('nan', unit='cm')
+        assert np.isnan(q.value)
+
+        q = u.Quantity('NaN', unit='cm')
+        assert np.isnan(q.value)
+
+        q = u.Quantity('-nan', unit='cm')  # float() allows this
+        assert np.isnan(q.value)
+
+        q = u.Quantity('nan cm')
+        assert np.isnan(q.value)
+        assert q.unit == u.cm
+
+        # Infinity
+        q = u.Quantity('inf', unit='cm')
+        assert np.isinf(q.value)
+
+        q = u.Quantity('-inf', unit='cm')
+        assert np.isinf(q.value)
+
+        q = u.Quantity('inf cm')
+        assert np.isinf(q.value)
+        assert q.unit == u.cm
+
+        q = u.Quantity('Infinity', unit='cm')  # float() allows this
+        assert np.isinf(q.value)
+
+        # make sure these strings don't parse...
+        with pytest.raises(TypeError):
+            q = u.Quantity('', unit='cm')
+
+        with pytest.raises(TypeError):
+            q = u.Quantity('spam', unit='cm')
+
     def test_unit_property(self):
         # test getting and setting 'unit' attribute
         q1 = u.Quantity(11.4, unit=u.meter)
@@ -96,7 +139,7 @@ class TestQuantityCreation(object):
         assert q2.unit == q1.unit
 
         # but we should preserve float32
-        a3 = np.array([1.,2.], dtype=np.float32)
+        a3 = np.array([1., 2.], dtype=np.float32)
         q3 = u.Quantity(a3, u.yr)
         assert q3.dtype == a3.dtype
         # items stored as objects by numpy should be converted to float
@@ -218,7 +261,7 @@ class TestQuantityCreation(object):
             u.Quantity(mylookalike)
 
 
-class TestQuantityOperations(object):
+class TestQuantityOperations:
     q1 = u.Quantity(11.42, u.meter)
     q2 = u.Quantity(8.0, u.centimeter)
 
@@ -315,6 +358,28 @@ class TestQuantityOperations(object):
         new_quantity = self.q1 ** 3
         assert_array_almost_equal(new_quantity.value, 1489.355288, decimal=7)
         assert new_quantity.unit == u.Unit("m^3")
+
+    def test_matrix_multiplication(self):
+        a = np.eye(3)
+        q = a * u.m
+        result1 = eval("q @ a")
+        assert np.all(result1 == q)
+        result2 = eval("a @ q")
+        assert np.all(result2 == q)
+        result3 = eval("q @ q")
+        assert np.all(result3 == a * u.m ** 2)
+        # less trivial case.
+        q2 = np.array([[[1., 0., 0.],
+                        [0., 1., 0.],
+                        [0., 0., 1.]],
+                       [[0., 1., 0.],
+                        [0., 0., 1.],
+                        [1., 0., 0.]],
+                       [[0., 0., 1.],
+                        [1., 0., 0.],
+                        [0., 1., 0.]]]) / u.s
+        result4 = eval("q @ q2")
+        assert np.all(result4 == np.matmul(a, q2.value) * q.unit * q2.unit)
 
     def test_unary(self):
 
@@ -441,6 +506,15 @@ class TestQuantityOperations(object):
         assert not 1. * u.cm == 1.
         assert 1. * u.cm != 1.
 
+        # comparison with zero should raise a deprecation warning
+        for quantity in (1. * u.cm, 1. * u.dimensionless_unscaled):
+            with catch_warnings(AstropyDeprecationWarning) as warning_lines:
+                bool(quantity)
+                assert warning_lines[0].category == AstropyDeprecationWarning
+                assert (str(warning_lines[0].message) == 'The truth value of '
+                        'a Quantity is ambiguous. In the future this will '
+                        'raise a ValueError.')
+
     def test_numeric_converters(self):
         # float, int, long, and __index__ should only work for single
         # quantities, of appropriate type, and only if they are dimensionless.
@@ -450,9 +524,9 @@ class TestQuantityOperations(object):
         # quantities with units should never convert, or be usable as an index
         q1 = u.Quantity(1, u.m)
 
-        converter_err_msg = ("Only dimensionless scalar quantities "
+        converter_err_msg = ("only dimensionless scalar quantities "
                              "can be converted to Python scalars")
-        index_err_msg = ("Only integer dimensionless scalar quantities "
+        index_err_msg = ("only integer dimensionless scalar quantities "
                          "can be converted to a Python index")
         with pytest.raises(TypeError) as exc:
             float(q1)
@@ -461,11 +535,6 @@ class TestQuantityOperations(object):
         with pytest.raises(TypeError) as exc:
             int(q1)
         assert exc.value.args[0] == converter_err_msg
-
-        if six.PY2:
-            with pytest.raises(TypeError) as exc:
-                long(q1)
-            assert exc.value.args[0] == converter_err_msg
 
         # We used to test `q1 * ['a', 'b', 'c'] here, but that that worked
         # at all was a really odd confluence of bugs.  Since it doesn't work
@@ -478,11 +547,8 @@ class TestQuantityOperations(object):
         # dimensionless but scaled is OK, however
         q2 = u.Quantity(1.23, u.m / u.km)
 
-        assert float(q2) == float(q2.to(u.dimensionless_unscaled).value)
-        assert int(q2) == int(q2.to(u.dimensionless_unscaled).value)
-
-        if six.PY2:
-            assert long(q2) == long(q2.to(u.dimensionless_unscaled).value)
+        assert float(q2) == float(q2.to_value(u.dimensionless_unscaled))
+        assert int(q2) == int(q2.to_value(u.dimensionless_unscaled))
 
         with pytest.raises(TypeError) as exc:
             q2.__index__()
@@ -493,11 +559,9 @@ class TestQuantityOperations(object):
 
         assert float(q3) == 1.23
         assert int(q3) == 1
-        if six.PY2:
-            assert long(q3) == 1
 
         with pytest.raises(TypeError) as exc:
-            q1.__index__()
+            q3.__index__()
         assert exc.value.args[0] == index_err_msg
 
         # integer dimensionless unscaled is good for all
@@ -505,8 +569,6 @@ class TestQuantityOperations(object):
 
         assert float(q4) == 2.
         assert int(q4) == 2
-        if six.PY2:
-            assert long(q4) == 2
 
         assert q4.__index__() == 2
 
@@ -520,14 +582,17 @@ class TestQuantityOperations(object):
             int(q5)
         assert exc.value.args[0] == converter_err_msg
 
-        if six.PY2:
-            with pytest.raises(TypeError) as exc:
-                long(q5)
-            assert exc.value.args[0] == converter_err_msg
-
         with pytest.raises(TypeError) as exc:
             q5.__index__()
         assert exc.value.args[0] == index_err_msg
+
+    # See https://github.com/numpy/numpy/issues/5074
+    # It seems unlikely this will be resolved, so xfail'ing it.
+    @pytest.mark.xfail(reason="list multiplication only works for numpy <=1.10")
+    def test_numeric_converter_to_index_in_practice(self):
+        """Test that use of __index__ actually works."""
+        q4 = u.Quantity(2, u.dimensionless_unscaled, dtype=int)
+        assert q4 * ['a', 'b', 'c'] == ['a', 'b', 'c', 'a', 'b', 'c']
 
     def test_array_converters(self):
 
@@ -542,26 +607,55 @@ class TestQuantityOperations(object):
 
 def test_quantity_conversion():
     q1 = u.Quantity(0.1, unit=u.meter)
-
+    value = q1.value
+    assert value == 0.1
+    value_in_km = q1.to_value(u.kilometer)
+    assert value_in_km == 0.0001
     new_quantity = q1.to(u.kilometer)
     assert new_quantity.value == 0.0001
 
     with pytest.raises(u.UnitsError):
         q1.to(u.zettastokes)
+    with pytest.raises(u.UnitsError):
+        q1.to_value(u.zettastokes)
+
+
+def test_quantity_value_views():
+    q1 = u.Quantity([1., 2.], unit=u.meter)
+    # views if the unit is the same.
+    v1 = q1.value
+    v1[0] = 0.
+    assert np.all(q1 == [0., 2.] * u.meter)
+    v2 = q1.to_value()
+    v2[1] = 3.
+    assert np.all(q1 == [0., 3.] * u.meter)
+    v3 = q1.to_value('m')
+    v3[0] = 1.
+    assert np.all(q1 == [1., 3.] * u.meter)
+    v4 = q1.to_value('cm')
+    v4[0] = 0.
+    # copy if different unit.
+    assert np.all(q1 == [1., 3.] * u.meter)
 
 
 def test_quantity_conversion_with_equiv():
     q1 = u.Quantity(0.1, unit=u.meter)
+    v2 = q1.to_value(u.Hz, equivalencies=u.spectral())
+    assert_allclose(v2, 2997924580.0)
     q2 = q1.to(u.Hz, equivalencies=u.spectral())
-    assert_allclose(q2.value, 2997924580.0)
+    assert_allclose(q2.value, v2)
 
     q1 = u.Quantity(0.4, unit=u.arcsecond)
+    v2 = q1.to_value(u.au, equivalencies=u.parallax())
     q2 = q1.to(u.au, equivalencies=u.parallax())
+    v3 = q2.to_value(u.arcminute, equivalencies=u.parallax())
     q3 = q2.to(u.arcminute, equivalencies=u.parallax())
 
-    assert_allclose(q2.value, 515662.015)
+    assert_allclose(v2, 515662.015)
+    assert_allclose(q2.value, v2)
     assert q2.unit == u.au
-    assert_allclose(q3.value, 0.0066666667)
+    assert_allclose(v3, 0.0066666667)
+    assert_allclose(q3.value, v3)
     assert q3.unit == u.arcminute
 
 
@@ -587,9 +681,12 @@ def test_quantity_conversion_equivalency_passed_on():
     assert_allclose(q4.value, q5.value)
 
 # Regression test for issue #2315, divide-by-zero error when examining 0*unit
+
+
 def test_self_equivalency():
     assert u.deg.is_equivalent(0*u.radian)
     assert u.deg.is_equivalent(1*u.radian)
+
 
 def test_si():
     q1 = 10. * u.m * u.s ** 2 / (200. * u.ms) ** 2  # 250 meters
@@ -623,7 +720,7 @@ def test_cgs():
     assert q.cgs.unit == u.barye
 
 
-class TestQuantityComparison(object):
+class TestQuantityComparison:
 
     def test_quantity_equality(self):
         assert u.Quantity(1000, unit='m') == u.Quantity(1, unit='km')
@@ -658,7 +755,7 @@ class TestQuantityComparison(object):
         assert u.Quantity(1200, unit=u.meter) != u.Quantity(1, unit=u.kilometer)
 
 
-class TestQuantityDisplay(object):
+class TestQuantityDisplay:
     scalarintq = u.Quantity(1, unit='m', dtype=int)
     scalarfloatq = u.Quantity(1.3, unit='m')
     arrq = u.Quantity([1, 2.3, 8.9], unit='m')
@@ -666,16 +763,23 @@ class TestQuantityDisplay(object):
     def test_dimensionless_quantity_repr(self):
         q2 = u.Quantity(1., unit='m-1')
         q3 = u.Quantity(1, unit='m-1', dtype=int)
-        assert repr(self.scalarintq * q2) == "<Quantity 1.0>"
+        if NUMPY_LT_1_14:
+            assert repr(self.scalarintq * q2) == "<Quantity 1.0>"
+            assert repr(self.arrq * q2) == "<Quantity [ 1. , 2.3, 8.9]>"
+        else:
+            assert repr(self.scalarintq * q2) == "<Quantity 1.>"
+            assert repr(self.arrq * q2) == "<Quantity [1. , 2.3, 8.9]>"
         assert repr(self.scalarintq * q3) == "<Quantity 1>"
-        assert repr(self.arrq * q2) == "<Quantity [ 1. , 2.3, 8.9]>"
 
     def test_dimensionless_quantity_str(self):
         q2 = u.Quantity(1., unit='m-1')
         q3 = u.Quantity(1, unit='m-1', dtype=int)
         assert str(self.scalarintq * q2) == "1.0"
         assert str(self.scalarintq * q3) == "1"
-        assert str(self.arrq * q2) == "[ 1.   2.3  8.9]"
+        if NUMPY_LT_1_14:
+            assert str(self.arrq * q2) == "[ 1.   2.3  8.9]"
+        else:
+            assert str(self.arrq * q2) == "[1.  2.3 8.9]"
 
     def test_dimensionless_quantity_format(self):
         q1 = u.Quantity(3.14)
@@ -690,10 +794,16 @@ class TestQuantityDisplay(object):
         assert repr(self.scalarfloatq) == "<Quantity 1.3 m>"
 
     def test_array_quantity_str(self):
-        assert str(self.arrq) == "[ 1.   2.3  8.9] m"
+        if NUMPY_LT_1_14:
+            assert str(self.arrq) == "[ 1.   2.3  8.9] m"
+        else:
+            assert str(self.arrq) == "[1.  2.3 8.9] m"
 
     def test_array_quantity_repr(self):
-        assert repr(self.arrq) == "<Quantity [ 1. , 2.3, 8.9] m>"
+        if NUMPY_LT_1_14:
+            assert repr(self.arrq) == "<Quantity [ 1. , 2.3, 8.9] m>"
+        else:
+            assert repr(self.arrq) == "<Quantity [1. , 2.3, 8.9] m>"
 
     def test_scalar_quantity_format(self):
         assert format(self.scalarintq, '02d') == "01 m"
@@ -709,17 +819,11 @@ class TestQuantityDisplay(object):
         from ...units.quantity import conf
 
         q2scalar = u.Quantity(1.5e14, 'm/s')
-        assert self.scalarintq._repr_latex_() == '$1 \\; \\mathrm{m}$'
-        assert self.scalarfloatq._repr_latex_() == '$1.3 \\; \\mathrm{m}$'
+        assert self.scalarintq._repr_latex_() == r'$1 \; \mathrm{m}$'
+        assert self.scalarfloatq._repr_latex_() == r'$1.3 \; \mathrm{m}$'
         assert (q2scalar._repr_latex_() ==
-                '$1.5 \\times 10^{14} \\; \\mathrm{\\frac{m}{s}}$')
-
-        if NUMPY_LT_1_7:
-            with pytest.raises(NotImplementedError):
-                self.arrq._repr_latex_()
-            return  # all arrays should fail
-
-        assert self.arrq._repr_latex_() == '$[1,~2.3,~8.9] \; \mathrm{m}$'
+                r'$1.5 \times 10^{14} \; \mathrm{\frac{m}{s}}$')
+        assert self.arrq._repr_latex_() == r'$[1,~2.3,~8.9] \; \mathrm{m}$'
 
         qmed = np.arange(100)*u.m
         qbig = np.arange(1000)*u.m
@@ -728,7 +832,17 @@ class TestQuantityDisplay(object):
         pops = np.get_printoptions()
         oldlat = conf.latex_array_threshold
         try:
-            #check thresholding behavior
+            # check precision behavior
+            q = u.Quantity(987654321.123456789, 'm/s')
+            qa = np.array([7.89123, 123456789.987654321, 0]) * u.cm
+            np.set_printoptions(precision=8)
+            assert q._repr_latex_() == r'$9.8765432 \times 10^{8} \; \mathrm{\frac{m}{s}}$'
+            assert qa._repr_latex_() == r'$[7.89123,~1.2345679 \times 10^{8},~0] \; \mathrm{cm}$'
+            np.set_printoptions(precision=2)
+            assert q._repr_latex_() == r'$9.9 \times 10^{8} \; \mathrm{\frac{m}{s}}$'
+            assert qa._repr_latex_() == r'$[7.9,~1.2 \times 10^{8},~0] \; \mathrm{cm}$'
+
+            # check thresholding behavior
             conf.latex_array_threshold = 100  # should be default
             lsmed = qmed._repr_latex_()
             assert r'\dots' not in lsmed
@@ -745,7 +859,6 @@ class TestQuantityDisplay(object):
             lsvbig = qvbig._repr_latex_()
             assert r'\dots' in lsvbig
 
-
             conf.latex_array_threshold = -1  # means use the numpy threshold
             np.set_printoptions(threshold=99)
             lsmed = qmed._repr_latex_()
@@ -761,7 +874,6 @@ class TestQuantityDisplay(object):
 
         qinfnan = [np.inf, -np.inf, np.nan] * u.m
         assert qinfnan._repr_latex_() == r'$[\infty,~-\infty,~{\rm NaN}] \; \mathrm{m}$'
-
 
 
 def test_decompose():
@@ -817,12 +929,10 @@ def test_arrays():
         qseclen0array[0]
     assert isinstance(qseclen0array.value, int)
 
-    # but with multiple dtypes, single elements are OK; need to use str()
-    # since numpy under python2 cannot handle unicode literals
-    a = np.array([(1.,2.,3.), (4.,5.,6.), (7.,8.,9.)],
-                 dtype=[(str('x'), np.float),
-                        (str('y'), np.float),
-                        (str('z'), np.float)])
+    a = np.array([(1., 2., 3.), (4., 5., 6.), (7., 8., 9.)],
+                 dtype=[('x', float),
+                        ('y', float),
+                        ('z', float)])
     qkpc = u.Quantity(a, u.kpc)
     assert not qkpc.isscalar
     qkpc0 = qkpc[0]
@@ -844,7 +954,7 @@ def test_arrays():
     assert qkpc1x == qkpcx1
 
     # can also create from lists, will auto-convert to arrays
-    qsec = u.Quantity(list(xrange(10)), u.second)
+    qsec = u.Quantity(list(range(10)), u.second)
     assert isinstance(qsec.value, np.ndarray)
 
     # quantity math should work with arrays
@@ -869,9 +979,6 @@ def test_arrays():
         float(qsec)
     with pytest.raises(TypeError):
         int(qsec)
-    if six.PY2:
-        with pytest.raises(TypeError):
-            long(qsec)
 
 
 def test_array_indexing_slicing():
@@ -881,7 +988,7 @@ def test_array_indexing_slicing():
 
 
 def test_array_setslice():
-    q = np.array([1., 2., 3. ]) * u.m
+    q = np.array([1., 2., 3.]) * u.m
     q[1:2] = np.array([400.]) * u.cm
     assert np.all(q == np.array([1., 4., 3.]) * u.m)
 
@@ -984,7 +1091,7 @@ def test_quantity_iterability():
     q1 = [15.0, 17.0] * u.m
     assert isiterable(q1)
 
-    q2 = six.next(iter(q1))
+    q2 = next(iter(q1))
     assert q2 == 15.0 * u.m
     assert not isiterable(q2)
     pytest.raises(TypeError, iter, q2)
@@ -1051,19 +1158,52 @@ def test_quantity_pickelability():
     assert q1.unit == q2.unit
 
 
-def test_quantity_from_string():
-    with pytest.raises(TypeError):
-        q = u.Quantity(u.m * "5")
-        # the reverse should also fail once #1408 is in
+def test_quantity_initialisation_from_string():
+    q = u.Quantity('1')
+    assert q.unit == u.dimensionless_unscaled
+    assert q.value == 1.
+    q = u.Quantity('1.5 m/s')
+    assert q.unit == u.m/u.s
+    assert q.value == 1.5
+    assert u.Unit(q) == u.Unit('1.5 m/s')
+    q = u.Quantity('.5 m')
+    assert q == u.Quantity(0.5, u.m)
+    q = u.Quantity('-1e1km')
+    assert q == u.Quantity(-10, u.km)
+    q = u.Quantity('-1e+1km')
+    assert q == u.Quantity(-10, u.km)
+    q = u.Quantity('+.5km')
+    assert q == u.Quantity(.5, u.km)
+    q = u.Quantity('+5e-1km')
+    assert q == u.Quantity(.5, u.km)
+    q = u.Quantity('5', u.m)
+    assert q == u.Quantity(5., u.m)
+    q = u.Quantity('5 km', u.m)
+    assert q.value == 5000.
+    assert q.unit == u.m
+    q = u.Quantity('5Em')
+    assert q == u.Quantity(5., u.Em)
 
     with pytest.raises(TypeError):
-        q = u.Quantity('5', u.m)
-
+        u.Quantity('')
     with pytest.raises(TypeError):
-        q = u.Quantity(['5'], u.m)
-
+        u.Quantity('m')
     with pytest.raises(TypeError):
-        q = u.Quantity(np.array(['5']), u.m)
+        u.Quantity('1.2.3 deg')
+    with pytest.raises(TypeError):
+        u.Quantity('1+deg')
+    with pytest.raises(TypeError):
+        u.Quantity('1-2deg')
+    with pytest.raises(TypeError):
+        u.Quantity('1.2e-13.3m')
+    with pytest.raises(TypeError):
+        u.Quantity(['5'])
+    with pytest.raises(TypeError):
+        u.Quantity(np.array(['5']))
+    with pytest.raises(ValueError):
+        u.Quantity('5E')
+    with pytest.raises(ValueError):
+        u.Quantity('5 foo')
 
 
 def test_unsupported():
@@ -1098,6 +1238,7 @@ def test_quantity_fraction_power():
     # the value of the quantity to a Fraction. [#3922]
     assert q.dtype.kind == 'f'
 
+
 def test_inherit_docstrings():
     assert u.Quantity.argmax.__doc__ == np.ndarray.argmax.__doc__
 
@@ -1131,6 +1272,28 @@ def test_quantity_from_table():
     assert qbp.unit == u.pc
     assert_array_equal(qbp.value, t['b'])
 
+
+def test_assign_slice_with_quantity_like():
+    # Regression tests for gh-5961
+    from ... table import Table, Column
+    # first check directly that we can use a Column to assign to a slice.
+    c = Column(np.arange(10.), unit=u.mm)
+    q = u.Quantity(c)
+    q[:2] = c[:2]
+    # next check that we do not fail the original problem.
+    t = Table()
+    t['x'] = np.arange(10) * u.mm
+    t['y'] = np.ones(10) * u.mm
+    assert type(t['x']) is Column
+
+    xy = np.vstack([t['x'], t['y']]).T * u.mm
+    ii = [0, 2, 4]
+
+    assert xy[ii, 0].unit == t['x'][ii].unit
+    # should not raise anything
+    xy[ii, 0] = t['x'][ii]
+
+
 def test_insert():
     """
     Test Quantity.insert method.  This does not test the full capabilities
@@ -1141,7 +1304,7 @@ def test_insert():
 
     # Insert a compatible float with different units
     q2 = q.insert(0, 1 * u.km)
-    assert np.all(q2.value == [ 1000,  1,  2])
+    assert np.all(q2.value == [1000, 1, 2])
     assert q2.unit is u.m
     assert q2.dtype.kind == 'f'
 
@@ -1157,17 +1320,17 @@ def test_insert():
     # Tests with multi-dim quantity
     q = [[1, 2], [3, 4]] * u.m
     q2 = q.insert(1, [10, 20] * u.m, axis=0)
-    assert np.all(q2.value == [[  1,  2],
-                               [ 10, 20],
-                               [  3,  4]])
+    assert np.all(q2.value == [[1, 2],
+                               [10, 20],
+                               [3, 4]])
 
     q2 = q.insert(1, [10, 20] * u.m, axis=1)
-    assert np.all(q2.value == [[  1, 10,  2],
-                               [  3, 20,  4]])
+    assert np.all(q2.value == [[1, 10, 2],
+                               [3, 20, 4]])
 
     q2 = q.insert(1, 10 * u.m, axis=1)
-    assert np.all(q2.value == [[  1,  10, 2],
-                               [  3,  10, 4]])
+    assert np.all(q2.value == [[1, 10, 2],
+                               [3, 10, 4]])
 
 
 def test_repr_array_of_quantity():
@@ -1180,11 +1343,103 @@ def test_repr_array_of_quantity():
     """
 
     a = np.array([1 * u.m, 2 * u.s], dtype=object)
-    if NUMPY_LT_1_7:
-        # Numpy 1.6.x has some different defaults for how to display object
-        # arrays (it uses the str() of the objects instead of the repr()
-        assert repr(a) == 'array([1.0 m, 2.0 s], dtype=object)'
-        assert str(a) == '[1.0 m 2.0 s]'
-    else:
+    if NUMPY_LT_1_14:
         assert repr(a) == 'array([<Quantity 1.0 m>, <Quantity 2.0 s>], dtype=object)'
         assert str(a) == '[<Quantity 1.0 m> <Quantity 2.0 s>]'
+    else:
+        assert repr(a) == 'array([<Quantity 1. m>, <Quantity 2. s>], dtype=object)'
+        assert str(a) == '[<Quantity 1. m> <Quantity 2. s>]'
+
+
+class TestSpecificTypeQuantity:
+    def setup(self):
+        class Length(u.SpecificTypeQuantity):
+            _equivalent_unit = u.m
+
+        class Length2(Length):
+            _default_unit = u.m
+
+        class Length3(Length):
+            _unit = u.m
+
+        self.Length = Length
+        self.Length2 = Length2
+        self.Length3 = Length3
+
+    def test_creation(self):
+        l = self.Length(np.arange(10.)*u.km)
+        assert type(l) is self.Length
+        with pytest.raises(u.UnitTypeError):
+            self.Length(np.arange(10.) * u.hour)
+
+        with pytest.raises(u.UnitTypeError):
+            self.Length(np.arange(10.))
+
+        l2 = self.Length2(np.arange(5.))
+        assert type(l2) is self.Length2
+        assert l2._default_unit is self.Length2._default_unit
+
+        with pytest.raises(u.UnitTypeError):
+            self.Length3(np.arange(10.))
+
+    def test_view(self):
+        l = (np.arange(5.) * u.km).view(self.Length)
+        assert type(l) is self.Length
+        with pytest.raises(u.UnitTypeError):
+            (np.arange(5.) * u.s).view(self.Length)
+
+        v = np.arange(5.).view(self.Length)
+        assert type(v) is self.Length
+        assert v._unit is None
+
+        l3 = np.ones((2, 2)).view(self.Length3)
+        assert type(l3) is self.Length3
+        assert l3.unit is self.Length3._unit
+
+    def test_operation_precedence_and_fallback(self):
+        l = self.Length(np.arange(5.)*u.cm)
+        sum1 = l + 1.*u.m
+        assert type(sum1) is self.Length
+        sum2 = 1.*u.km + l
+        assert type(sum2) is self.Length
+        sum3 = l + l
+        assert type(sum3) is self.Length
+        res1 = l * (1.*u.m)
+        assert type(res1) is u.Quantity
+        res2 = l * l
+        assert type(res2) is u.Quantity
+
+
+@pytest.mark.skipif('not HAS_MATPLOTLIB')
+@pytest.mark.xfail('MATPLOTLIB_LT_15')
+class TestQuantityMatplotlib:
+    """Test if passing matplotlib quantities works.
+
+    TODO: create PNG output and check against reference image
+          once `astropy.wcsaxes` is merged, which provides
+          the machinery for this.
+
+    See https://github.com/astropy/astropy/issues/1881
+    See https://github.com/astropy/astropy/pull/2139
+    """
+
+    def test_plot(self):
+        data = u.Quantity([4, 5, 6], 's')
+        plt.plot(data)
+
+    def test_scatter(self):
+        x = u.Quantity([4, 5, 6], 'second')
+        y = [1, 3, 4] * u.m
+        plt.scatter(x, y)
+
+
+def test_unit_class_override():
+    class MyQuantity(u.Quantity):
+        pass
+
+    my_unit = u.Unit("my_deg", u.deg)
+    my_unit._quantity_class = MyQuantity
+    q1 = u.Quantity(1., my_unit)
+    assert type(q1) is u.Quantity
+    q2 = u.Quantity(1., my_unit, subok=True)
+    assert type(q2) is MyQuantity

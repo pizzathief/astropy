@@ -8,18 +8,18 @@ framework, but it is useful for some users who are used to more functional
 interfaces.
 """
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 import numpy as np
 
 from .. import units as u
+from ..constants import c
 from .. import _erfa as erfa
 from ..io import ascii
 from ..utils import isiterable, data
 from .sky_coordinate import SkyCoord
 from .builtin_frames import GCRS, PrecessedGeocentric
 from .representation import SphericalRepresentation, CartesianRepresentation
+from .builtin_frames.utils import get_jd12
 
 __all__ = ['cartesian_to_spherical', 'spherical_to_cartesian', 'get_sun',
            'concatenate', 'get_constellation']
@@ -147,27 +147,25 @@ def get_sun(time):
     250 km over the 1000-3000.
 
     """
-    earth_pv_helio, earth_pv_bary = erfa.epv00(time.jd1, time.jd2)
+    earth_pv_helio, earth_pv_bary = erfa.epv00(*get_jd12(time, 'tdb'))
 
     # We have to manually do aberration because we're outputting directly into
     # GCRS
-    earth_p = earth_pv_helio[..., 0, :]
-    earth_v = earth_pv_helio[..., 1, :]
+    earth_p = earth_pv_helio['p']
+    earth_v = earth_pv_bary['v']
+
+    # convert barycentric velocity to units of c, but keep as array for passing in to erfa
+    earth_v /= c.to_value(u.au/u.d)
 
     dsun = np.sqrt(np.sum(earth_p**2, axis=-1))
-    invlorentz = (1-np.sum(earth_v**2, axis=-1))**-0.5
-    properdir = erfa.ab(earth_p/dsun.reshape(-1, 1), earth_v, dsun, invlorentz)
+    invlorentz = (1-np.sum(earth_v**2, axis=-1))**0.5
+    properdir = erfa.ab(earth_p/dsun.reshape(dsun.shape + (1,)),
+                        -earth_v, dsun, invlorentz)
 
-    x = -dsun*properdir[..., 0] * u.AU
-    y = -dsun*properdir[..., 1] * u.AU
-    z = -dsun*properdir[..., 2] * u.AU
-
-    if time.isscalar:
-        cartrep = CartesianRepresentation(x=x[0], y=y[0], z=z[0])
-    else:
-        cartrep = CartesianRepresentation(x=x, y=y, z=z)
+    cartrep = CartesianRepresentation(x=-dsun*properdir[..., 0] * u.AU,
+                                      y=-dsun*properdir[..., 1] * u.AU,
+                                      z=-dsun*properdir[..., 2] * u.AU)
     return SkyCoord(cartrep, frame=GCRS(obstime=time))
-
 
 
 def concatenate(coords):
@@ -198,13 +196,15 @@ def concatenate(coords):
 
 # global dictionary that caches repeatedly-needed info for get_constellation
 _constellation_data = {}
+
+
 def get_constellation(coord, short_name=False, constellation_list='iau'):
     """
     Determines the constellation(s) a given coordinate object contains.
 
     Parameters
     ----------
-    coords : coordinate object
+    coord : coordinate object
         The object to determine the constellation of.
     short_name : bool
         If True, the returned names are the IAU-sanctioned abbreviated

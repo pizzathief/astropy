@@ -1,31 +1,37 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICNSE.rst
 
+# This module includes files automatically generated from ply (these end in
+# _lextab.py and _parsetab.py). To generate these files, remove them from this
+# folder, then build astropy and run the tests in-place:
+#
+#   python setup.py build_ext --inplace
+#   pytest astropy/units
+#
+# You can then commit the changes to the re-generated _lextab.py and
+# _parsetab.py files.
+
 """
 Handles units in `Office of Guest Investigator Programs (OGIP)
 FITS files
-<http://heasarc.gsfc.nasa.gov/docs/heasarc/ofwg/docs/general/ogip_93_001/>`__.
+<https://heasarc.gsfc.nasa.gov/docs/heasarc/ofwg/docs/general/ogip_93_001/>`__.
 """
-
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
-
-from ...extern import six
 
 import keyword
 import math
 import os
+import copy
 import warnings
+from fractions import Fraction
 
 from . import core, generic, utils
-from ...utils.compat.fractions import Fraction
 
 
 class OGIP(generic.Generic):
     """
     Support the units in `Office of Guest Investigator Programs (OGIP)
     FITS files
-    <http://heasarc.gsfc.nasa.gov/docs/heasarc/ofwg/docs/general/ogip_93_001/>`__.
+    <https://heasarc.gsfc.nasa.gov/docs/heasarc/ofwg/docs/general/ogip_93_001/>`__.
     """
 
     _tokens = (
@@ -158,8 +164,14 @@ class OGIP(generic.Generic):
             raise ValueError(
                 "Invalid character at col {0}".format(t.lexpos))
 
+        lexer_exists = os.path.exists(os.path.join(os.path.dirname(__file__),
+                                                   'ogip_lextab.py'))
+
         lexer = lex.lex(optimize=True, lextab='ogip_lextab',
                         outputdir=os.path.dirname(__file__))
+
+        if not lexer_exists:
+            cls._add_tab_header('ogip_lextab')
 
         return lexer
 
@@ -168,7 +180,7 @@ class OGIP(generic.Generic):
         """
         The grammar here is based on the description in the
         `Specification of Physical Units within OGIP FITS files
-        <http://heasarc.gsfc.nasa.gov/docs/heasarc/ofwg/docs/general/ogip_93_001/>`__,
+        <https://heasarc.gsfc.nasa.gov/docs/heasarc/ofwg/docs/general/ogip_93_001/>`__,
         which is not terribly precise.  The exact grammar is here is
         based on the YACC grammar in the `unity library
         <https://bitbucket.org/nxg/unity/>`_.
@@ -223,21 +235,28 @@ class OGIP(generic.Generic):
                             | UNIT OPEN_PAREN complete_expression CLOSE_PAREN power numeric_power
                             | OPEN_PAREN complete_expression CLOSE_PAREN power numeric_power
             '''
-            if p[1] in cls._functions and p[1] != 'sqrt':
+
+            # If we run p[1] in cls._functions, it will try and parse each
+            # item in the list into a unit, which is slow. Since we know that
+            # all the items in the list are strings, we can simply convert
+            # p[1] to a string instead.
+            p1_str = str(p[1])
+
+            if p1_str in cls._functions and p1_str != 'sqrt':
                 raise ValueError(
                     "The function '{0}' is valid in OGIP, but not understood "
                     "by astropy.units.".format(
                         p[1]))
 
             if len(p) == 7:
-                if p[1] == 'sqrt':
+                if p1_str == 'sqrt':
                     p[0] = p[1] * p[3] ** (0.5 * p[6])
                 else:
                     p[0] = p[1] * p[3] ** p[6]
             elif len(p) == 6:
                 p[0] = p[2] ** p[5]
             elif len(p) == 5:
-                if p[1] == 'sqrt':
+                if p1_str == 'sqrt':
                     p[0] = p[3] ** 0.5
                 else:
                     p[0] = p[1] * p[3]
@@ -341,9 +360,15 @@ class OGIP(generic.Generic):
         def p_error(p):
             raise ValueError()
 
+        parser_exists = os.path.exists(os.path.join(os.path.dirname(__file__),
+                                       'ogip_parsetab.py'))
+
         parser = yacc.yacc(debug=False, tabmodule='ogip_parsetab',
                            outputdir=os.path.dirname(__file__),
                            write_tables=True)
+
+        if not parser_exists:
+            cls._add_tab_header('ogip_parsetab')
 
         return parser
 
@@ -354,7 +379,7 @@ class OGIP(generic.Generic):
         except ValueError as e:
             raise ValueError(
                 "At col {0}, '{1}': {2}".format(
-                    t.lexpos, t.value, six.text_type(e)))
+                    t.lexpos, t.value, str(e)))
 
     @classmethod
     def _validate_unit(cls, unit, detailed_exception=True):
@@ -391,7 +416,7 @@ class OGIP(generic.Generic):
                 return core.Unit(
                     cls._parser.parse(s, lexer=cls._lexer, debug=debug))
             except ValueError as e:
-                if six.text_type(e):
+                if str(e):
                     raise
                 else:
                     raise ValueError(

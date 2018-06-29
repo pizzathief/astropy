@@ -1,13 +1,21 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
+# This module includes files automatically generated from ply (these end in
+# _lextab.py and _parsetab.py). To generate these files, remove them from this
+# folder, then build astropy and run the tests in-place:
+#
+#   python setup.py build_ext --inplace
+#   pytest astropy/coordinates
+#
+# You can then commit the changes to the re-generated _lextab.py and
+# _parsetab.py files.
+
 """
 This module contains utility functions that are for internal use in
 astropy.coordinates.angles. Mainly they are conversions from one format
 of data to another.
 """
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
 
 import os
 from warnings import warn
@@ -21,7 +29,21 @@ from ..utils import format_exception
 from .. import units as u
 
 
-class _AngleParser(object):
+TAB_HEADER = """# -*- coding: utf-8 -*-
+# Licensed under a 3-clause BSD style license - see LICENSE.rst
+
+# This file was automatically generated from ply. To re-generate this file,
+# remove it from this folder, then build astropy and run the tests in-place:
+#
+#   python setup.py build_ext --inplace
+#   pytest astropy/coordinates
+#
+# You can then commit the changes to this file.
+
+"""
+
+
+class _AngleParser:
     """
     Parses the various angle formats including:
 
@@ -35,6 +57,13 @@ class _AngleParser(object):
     instead.
     """
     def __init__(self):
+        # TODO: in principle, the parser should be invalidated if we change unit
+        # system (from CDS to FITS, say).  Might want to keep a link to the
+        # unit_registry used, and regenerate the parser/lexer if it changes.
+        # Alternatively, perhaps one should not worry at all and just pre-
+        # generate the parser for each release (as done for unit formats).
+        # For some discussion of this problem, see
+        # https://github.com/astropy/astropy/issues/5350#issuecomment-248770151
         if '_parser' not in _AngleParser.__dict__:
             _AngleParser._parser, _AngleParser._lexer = self._make_parser()
 
@@ -42,12 +71,13 @@ class _AngleParser(object):
     def _get_simple_unit_names(cls):
         simple_units = set(
             u.radian.find_equivalent_units(include_prefix_units=True))
-        simple_units.remove(u.deg)
-        simple_units.remove(u.hourangle)
         simple_unit_names = set()
+        # We filter out degree and hourangle, since those are treated
+        # separately.
         for unit in simple_units:
-            simple_unit_names.update(unit.names)
-        return list(simple_unit_names)
+            if unit != u.deg and unit != u.hourangle:
+                simple_unit_names.update(unit.names)
+        return sorted(simple_unit_names)
 
     @classmethod
     def _make_parser(cls):
@@ -112,9 +142,15 @@ class _AngleParser(object):
             raise ValueError(
                 "Invalid character at col {0}".format(t.lexpos))
 
+        lexer_exists = os.path.exists(os.path.join(os.path.dirname(__file__),
+                                      'angle_lextab.py'))
+
         # Build the lexer
         lexer = lex.lex(optimize=True, lextab='angle_lextab',
                         outputdir=os.path.dirname(__file__))
+
+        if not lexer_exists:
+            cls._add_tab_header('angle_lextab')
 
         def p_angle(p):
             '''
@@ -238,11 +274,29 @@ class _AngleParser(object):
         def p_error(p):
             raise ValueError
 
+        parser_exists = os.path.exists(os.path.join(os.path.dirname(__file__),
+                                       'angle_parsetab.py'))
+
         parser = yacc.yacc(debug=False, tabmodule='angle_parsetab',
                            outputdir=os.path.dirname(__file__),
                            write_tables=True)
 
+        if not parser_exists:
+            cls._add_tab_header('angle_parsetab')
+
         return parser, lexer
+
+    @classmethod
+    def _add_tab_header(cls, name):
+
+        lextab_file = os.path.join(os.path.dirname(__file__), name + '.py')
+
+        with open(lextab_file, 'r') as f:
+            contents = f.read()
+
+        with open(lextab_file, 'w') as f:
+            f.write(TAB_HEADER)
+            f.write(contents)
 
     def parse(self, angle, unit, debug=False):
         try:
@@ -509,14 +563,15 @@ def sexagesimal_to_string(values, precision=None, pad=False, sep=(':',),
     interface to this functionality.
     """
 
-    # If the coordinates are negative, we need to take the absolute value of
-    # the (arc)minutes and (arc)seconds. We need to use np.abs because abs(-0)
-    # is -0.
-    values = (values[0], np.abs(values[1]), np.abs(values[2]))
+    # Check to see if values[0] is negative, using np.copysign to handle -0
+    sign = np.copysign(1.0, values[0])
+    # If the coordinates are negative, we need to take the absolute values.
+    # We use np.abs because abs(-0) is -0
+    # TODO: Is this true? (MHvK, 2018-02-01: not on my system)
+    values = [np.abs(value) for value in values]
 
     if pad:
-        # Check to see if values[0] is negative, using np.copysign to handle -0
-        if np.copysign(1.0, values[0]) == -1:
+        if sign == -1:
             pad = 3
         else:
             pad = 2
@@ -554,17 +609,16 @@ def sexagesimal_to_string(values, precision=None, pad=False, sep=(':',),
     else:
         rounding_thresh = 60.0 - (10.0 ** -precision)
 
-    values = list(values)
     if fields == 3 and values[2] >= rounding_thresh:
         values[2] = 0.0
         values[1] += 1.0
     elif fields < 3 and values[2] >= 30.0:
         values[1] += 1.0
 
-    if fields >= 2 and int(values[1]) >= 60.0:
+    if fields >= 2 and values[1] >= 60.0:
         values[1] = 0.0
         values[0] += 1.0
-    elif fields < 2 and int(values[1]) >= 30.0:
+    elif fields < 2 and values[1] >= 30.0:
         values[0] += 1.0
 
     literal = []
@@ -583,7 +637,8 @@ def sexagesimal_to_string(values, precision=None, pad=False, sep=(':',),
             last_value = '0' + last_value
         literal.append('{last_value}{sep[2]}')
     literal = ''.join(literal)
-    return literal.format(values[0], int(abs(values[1])), abs(values[2]),
+    return literal.format(np.copysign(values[0], sign),
+                          int(values[1]), values[2],
                           sep=sep, pad=pad,
                           last_value=last_value)
 
@@ -636,7 +691,7 @@ def angular_separation(lon1, lat1, lon2, lat2):
     some alternatives, but is stable at at all distances, including the
     poles and antipodes.
 
-    .. [1] http://en.wikipedia.org/wiki/Great-circle_distance
+    .. [1] https://en.wikipedia.org/wiki/Great-circle_distance
     """
 
     sdlon = np.sin(lon2 - lon1)
@@ -650,7 +705,7 @@ def angular_separation(lon1, lat1, lon2, lat2):
     num2 = clat1 * slat2 - slat1 * clat2 * cdlon
     denominator = slat1 * slat2 + clat1 * clat2 * cdlon
 
-    return np.arctan2(np.sqrt(num1 ** 2 + num2 ** 2), denominator)
+    return np.arctan2(np.hypot(num1, num2), denominator)
 
 
 def position_angle(lon1, lat1, lon2, lat2):
@@ -679,4 +734,4 @@ def position_angle(lon1, lat1, lon2, lat2):
     x = np.sin(lat2) * np.cos(lat1) - colat * np.sin(lat1) * np.cos(deltalon)
     y = np.sin(deltalon) * colat
 
-    return Angle(np.arctan2(y, x)).wrap_at(360*u.deg)
+    return Angle(np.arctan2(y, x), u.radian).wrap_at(360*u.deg)

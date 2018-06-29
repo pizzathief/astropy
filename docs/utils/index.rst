@@ -18,7 +18,13 @@ Astropy.
 
 Because of the mostly standalone and grab-bag nature of these utilities, they
 are generally best understood through their docstrings, and hence this
-documentation does not have detailed sections like the other packages.
+documentation generally does not have detailed sections like the other packages.
+The exception is below:
+
+.. toctree::
+   :maxdepth: 1
+
+   iers
 
 .. note:: The ``astropy.utils.compat`` subpackage is not included in this
     documentation. It contains utility modules for compatibility with
@@ -34,19 +40,7 @@ Reference/API
 =============
 .. module:: astropy.utils
 
-.. automodapi:: astropy.utils.misc
-    :no-inheritance-diagram:
-
-.. automodapi:: astropy.utils.decorators
-    :no-inheritance-diagram:
-
 .. automodapi:: astropy.utils.codegen
-    :no-inheritance-diagram:
-
-.. automodapi:: astropy.utils.introspection
-    :no-inheritance-diagram:
-
-.. automodapi:: astropy.utils.exceptions
     :no-inheritance-diagram:
 
 .. automodapi:: astropy.utils.collections
@@ -55,10 +49,34 @@ Reference/API
 .. automodapi:: astropy.utils.console
     :no-inheritance-diagram:
 
-.. automodapi:: astropy.utils.timer
+.. automodapi:: astropy.utils.data_info
+    :no-inheritance-diagram:
+
+.. automodapi:: astropy.utils.decorators
+    :no-inheritance-diagram:
+
+.. automodapi:: astropy.utils.diff
+    :no-inheritance-diagram:
+
+.. automodapi:: astropy.utils.exceptions
+    :no-inheritance-diagram:
+
+.. automodapi:: astropy.utils.iers
+    :no-inheritance-diagram:
+
+.. automodapi:: astropy.utils.introspection
+    :no-inheritance-diagram:
+
+.. automodapi:: astropy.utils.metadata
+    :no-inheritance-diagram:
+
+.. automodapi:: astropy.utils.misc
     :no-inheritance-diagram:
 
 .. automodapi:: astropy.utils.state
+    :no-inheritance-diagram:
+
+.. automodapi:: astropy.utils.timer
     :no-inheritance-diagram:
 
 
